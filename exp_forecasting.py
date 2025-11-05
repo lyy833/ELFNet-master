@@ -3,7 +3,7 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
-from utils.tools import EarlyStopping, adjust_learning_rate,visual
+from utils.tools import IterationEarlyStopping, adjust_learning_rate,visual
 from utils.metrics import metric
 from ELFNet.ELFNet import ELFNet
 import ast
@@ -21,7 +21,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 class Exp_forecasting(object):
-    def __init__(self, args, setting):
+    def __init__(self, args, setting,folder_path,plot_dir):
         
         self.args = args  
         self.setting = setting
@@ -53,12 +53,11 @@ class Exp_forecasting(object):
         
         
         self.criterion = self._select_criterion()
-        self.early_stopping = EarlyStopping(patience=args.patience, verbose=True)  # Set early stopping mechanism
+        self.early_stopping = IterationEarlyStopping(patience_epochs=args.patience_epochs,patience_iterations=args.patience_iterations,min_iterations=args.min_iterations,verbose=True,delta=args.improved_delta)  # Set early stopping mechanism
         self.device = self._acquire_device()
         # Define and create the path to save the results of this task
-        self.folder_path = './test_results/' + setting + '/'
-        if not os.path.exists(self.folder_path):
-            os.makedirs(self.folder_path)
+        self.folder_path = folder_path
+        self.plot_dir = plot_dir
 
         # Model initialization
         self._init_models()
@@ -72,37 +71,39 @@ class Exp_forecasting(object):
 
     def _init_single_mode_models(self):
         """Model initialization for Single mode """
-        if self.args.compare is None or self.args.compare in ['ELFNet_depthwise', 'ELFNet_no_disentanglement', 'ELFNet_no_contrastive', 'ELFNet_dilution']:
-            if self.args.compare is None: # Complete version of ELFNet
+        if self.args.model_used in ['ELFNet','ELFNet_depthwise', 'ELFNet_no_disentanglement', 'ELFNet_no_contrastive', 'ELFNet_dilution']:
+            self.pretrain_model =None
+            self.finetune_model = None
+            if self.args.model_used =='ELFNet': # Complete version of ELFNet
                 print('Standard VG-HCS ELFNet in single mode...')
                 groups = ast.literal_eval(self.args.groups)
                 self.model = ELFNet(
                     self.args, self.train_data.targetidx, self.input_channels, 
                     device=self.device, groups=groups
                 ).to(self.device)
-            elif self.args.compare == 'ELFNet_dilution':
+            elif self.args.model_used == 'ELFNet_dilution':
                 print('ELFNet without VG-HCS in ablation experiment (CD)...')
                 self.model = ELFNet(
                     self.args, self.train_data.targetidx, self.input_channels, 
                     device=self.device
                 ).to(self.device)
-            elif self.args.compare == 'ELFNet_depthwise':
+            elif self.args.model_used == 'ELFNet_depthwise':
                 print('ELFNet without VG-HCS in ablation experiment (CI)...')
-                self.model = ELFNet_depthwise(
+                self.model = ELFNet_depthwise.ELFNet_depthwise(
                     self.args, self.train_data.targetidx, self.input_channels, 
                     device=self.device
                 ).to(self.device)
-            elif self.args.compare == 'ELFNet_no_disentanglement':
+            elif self.args.model_used == 'ELFNet_no_disentanglement':
                 print('ELFNet without disentanglement in ablation experiment...')
                 groups = ast.literal_eval(self.args.groups)
-                self.model = ELFNet_no_disentanglement(
+                self.model = ELFNet_no_disentanglement.ELFNet_no_disentanglement(
                     self.args, self.train_data.targetidx, self.input_channels, 
                     device=self.device, groups=groups
                 ).to(self.device)
-            elif self.args.compare == 'ELFNet_no_contrastive':
+            elif self.args.model_used == 'ELFNet_no_contrastive':
                 print('ELFNet without contrastive learning in ablation experiment...')
                 groups = ast.literal_eval(self.args.groups)
-                self.model = ELFNet_no_contrastive(
+                self.model = ELFNet_no_contrastive.ELFNet_no_contrastive(
                     self.args, self.train_data.targetidx, self.input_channels, 
                     device=self.device, groups=groups
                 ).to(self.device)
@@ -152,7 +153,7 @@ class Exp_forecasting(object):
         print(f"Fine-tuning dataset info: Channels={input_channels}, Target Index={target_idx}, Groups={groups}")
         
         # Construct standard ELFNet
-        if self.args.compare is None:
+        if self.args.model_used =='ELFNet':
             self.finetune_model = ELFNet(
                 self.args, target_idx, input_channels, 
                 device=self.device, groups=groups, stage2=True
@@ -160,7 +161,7 @@ class Exp_forecasting(object):
         else:
             # Handle ablation experiment models
             self.finetune_model = self._build_ablation_model(
-                self.args.compare, target_idx, input_channels, groups
+                self.args.model_used, target_idx, input_channels, groups
             )
         
         # Transfer pretraining weights
@@ -204,7 +205,7 @@ class Exp_forecasting(object):
 
     def _build_CompareModel(self):
         """Initialize baseline model"""
-        model = self.CompareModel_dict[self.args.compare](self.args)
+        model = self.CompareModel_dict[self.args.model_used](self.args)
         model = model.float()  
 
         if self.args.use_multi_gpu and self.args.use_gpu:
@@ -235,16 +236,19 @@ class Exp_forecasting(object):
         optimizer = self.optimizer
         early_stopping = self.early_stopping
         
-        if not os.path.exists(self.folder_path):
-            os.makedirs(self.folder_path)
-
+        model_path = os.path.join(self.folder_path, 'baseline_model')
+        if not os.path.exists(model_path):
+            os.makedirs(model_path)
+        model_name = f"{self.args.model_used}_{os.path.splitext(self.args.data_path.split('/')[-1])[0]}"
+        full_model_path = os.path.join(model_path,f"{model_name}.pth")
+        
         t = time.time()
-        print('=============Starting to train Compare Model==============')
+        print('=============Starting to train model_used Model==============')
         self.CompareModel.train()
         losses = []
+        global_iteration = 0
         for epoch in range(epochs):
             train_loss = []
-
             # 是否聚类以减少样本
             if self.args.cluster=='True':
                 train_loader=self.cluster_train_loader
@@ -271,10 +275,26 @@ class Exp_forecasting(object):
                 optimizer.step()
                 
                 losses.append(loss.item())
+                
+                global_iteration += 1
+                # 更新损失窗口
+                early_stopping.update_loss_window(loss.item())
+                # 每100个iteration检查一次早停
+                if global_iteration % 100 == 0:
+                    # 计算最近100个iteration的平均损失
+                    recent_avg_loss = np.mean(train_loss[-100:]) if len(train_loss) >= 100 else np.mean(train_loss)
+                    # iteration级别早停判断
+                    early_stopping(recent_avg_loss, self.CompareModel, model_path, model_name,is_iteration=True, current_iteration=global_iteration)
+                    if early_stopping.is_loss_stable(threshold=0.001): # 额外检查损失是否稳定
+                        print(f"损失已趋于稳定，考虑早停")
+                        early_stopping.early_stop = True
+                    if early_stopping.early_stop:
+                        print("iteration级别训练早停")
+                        break
+                             
                 if (iteration+1) % self.args.log_interval==0:
                     print(f"Iter: {iteration+1}, Train Loss: {loss:.7f}")
-
-
+           
             train_loss = np.average(train_loss)
             print(f"Epoch: {epoch+1}, Train Loss: {train_loss:.7f}")
 
@@ -284,51 +304,56 @@ class Exp_forecasting(object):
             
             print(f"Training Time  until now: {time.time() - t:.2f}s")
 
-            early_stopping(vali_loss, self.CompareModel, self.folder_path)
+            early_stopping(vali_loss, self.CompareModel, model_path,model_name,is_iteration=False,current_iteration=global_iteration)
+            
+            if self.args.plot: # 可视化训练损失
+                self._plot_losses(losses, 'compare_train')
+            
             if early_stopping.early_stop :
                 break
 
             adjust_learning_rate(optimizer, epoch + 1, self.args)
         
         total_training_time = time.time() - t
-        print(f"Total Training Time: {total_training_time:.2f}s")
+        print(f"Total Training Time: {total_training_time:.2f}s, 总迭代次数: {global_iteration}")
 
-        # 可视化训练损失
-        if self.args.plot:
-            self._plot_losses(losses, 'compare_train')
-        return total_training_time
+        return total_training_time,full_model_path
     
 
-    def _train_ELFNet(self):  
+    def _train_ELFNet_family(self):  
         """ ELFNet 训练流程，支持one2many 和 single 两种模式"""
         
         if self.args.pretrain_mode == 'one2many':
             print("one2many mode:")
             if self.args.model_path is not None:
                 training_time_stage1 = 0
-                training_time_stage2 = self._train_stage2_one2many()
+                training_time_stage2,model_path = self._train_stage2_one2many()
             else:
                 print("阶段1-预训练：使用通道独立的 ELFNet-Base ...")
                 training_time_stage1 = self._train_stage1_one2many()
                 print("阶段2-微调：构建并迁移权重到标准 ELFNet...")
-                training_time_stage2 = self._train_stage2_one2many()
+                training_time_stage2,model_path = self._train_stage2_one2many()
             total_training_time = training_time_stage1 + training_time_stage2   
         else:  # Single 模式
-            if self.args.compare == 'ELFNet_no_contrastive' or self.args.model_path is not None:
+            if self.args.model_used == 'ELFNet_no_contrastive' or self.args.model_path is not None:
                 training_time_stage1 = 0
-                training_time_stage2 = self.train_stage2()  
+                training_time_stage2,model_path = self.train_stage2()  
             else:
                 training_time_stage1 = self.train_stage1()
-                training_time_stage2 = self.train_stage2()
+                training_time_stage2,model_path = self.train_stage2()
             total_training_time = training_time_stage1 + training_time_stage2   
         
-        return training_time_stage1, training_time_stage2, total_training_time
+        return training_time_stage1, training_time_stage2, total_training_time,model_path
 
     def _train_stage1_one2many(self):
         """one2many 模式的阶段1：自监督预训练"""
         epochs = self.args.train_epochs1
         optimizer = self.pretrain_optimizer
+        early_stopping = self.early_stopping
         model = self.pretrain_model
+
+        model_path = os.path.join(self.folder_path, 'pretrained_ELFNet_family')
+        model_name = f"{self.args.model_used}_{os.path.splitext(self.args.pretrain_data_path.split('/')[-1])[0]}"
         
         t = time.time()
         model.train()
@@ -342,16 +367,34 @@ class Exp_forecasting(object):
             train_loader = self.pretrain_loader
             max_iterations = self.max_iterations
 
+        global_iteration = 0
+
         for epoch in range(epochs):
             train_loss = []
             for iteration, (batch_x, _, batch_y, _) in enumerate(train_loader):
                 optimizer.zero_grad()
-                loss = model.compute_loss(batch_x, batch_y, self.folder_path, epoch)
+                loss = model.compute_loss(batch_x.to(self.device), batch_y.to(self.device), self.plot_dir, epoch)
                 train_loss.append(loss.item())
                 loss.backward()
                 optimizer.step()
                 losses.append(loss.item())
-                
+
+                global_iteration += 1
+                # 更新损失窗口
+                early_stopping.update_loss_window(loss.item())
+                # 每100个iteration检查一次早停
+                if global_iteration % 100 == 0:
+                    # 计算最近100个iteration的平均损失
+                    recent_avg_loss = np.mean(train_loss[-100:]) if len(train_loss) >= 100 else np.mean(train_loss)
+                    # iteration级别早停判断
+                    early_stopping(recent_avg_loss, model, model_path,model_name, is_iteration=True, current_iteration=global_iteration)
+                    if early_stopping.is_loss_stable(threshold=0.001): # 额外检查损失是否稳定
+                        print(f"损失已趋于稳定，考虑早停")
+                        early_stopping.early_stop = True
+                    if early_stopping.early_stop:
+                        print("iteration级别训练早停")
+                        break # 跳出当前iteration
+
                 if (iteration + 1) % self.args.log_interval == 0:
                     print(f"预训练 Iter: {iteration+1}, Loss: {loss:.7f}")
             
@@ -363,9 +406,16 @@ class Exp_forecasting(object):
             
             print(f"预训练时间: {time.time() - t:.2f}s")
             
-            # 早停机制
-            self.early_stopping(train_loss, model, self.folder_path)
-            if self.early_stopping.early_stop:
+            # ELFNet第一阶段预训练比较特殊，因为其早停只涉及训练集损失
+            # 因此如果已经iteration级别早停，不用判断是否epoch早停，直接终止训练
+            # 但是其它模型或者ELFNet微调训练阶段训练集损失iteration级别早停后还要进一步判断验证集上epoch级别早停
+            if early_stopping.early_stop : 
+                break
+
+            # epoch级别早停机制
+            early_stopping(train_loss, model, model_path,model_name,is_iteration=False,current_iteration=global_iteration)
+            if early_stopping.early_stop:
+                print("epoch级别训练早停")
                 break
 
             adjust_learning_rate(optimizer, epoch + 1, self.args)
@@ -383,13 +433,17 @@ class Exp_forecasting(object):
         optimizer = self.finetune_optimizer
         model = self.finetune_model
         
-        # 重置早停机制
-        self.early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
+        model_path = os.path.join(self.folder_path, 'finetuned_ELFNet_family')
+        model_name = f"{self.args.model_used}_{os.path.splitext(self.args.pretrain_data_path.split('/')[-1])[0]}"
+        full_model_path = os.path.join(model_path,f"{model_name}.pth")
         
+        # 重置早停器
+        self.early_stopping = IterationEarlyStopping(patience_epochs=self.args.patience_epochs,patience_iterations=self.args.patience_iterations,min_iterations=self.args.min_iterations,verbose=True,delta=self.args.improved_delta)
+        early_stopping = self.early_stopping
         t = time.time()
         model.train()
         losses = []
-
+        global_iteration = 0
         for epoch in range(epochs):
             train_loss = []
             for iteration, (batch_x, _, batch_y, _) in enumerate(self.finetune_loader):
@@ -406,6 +460,22 @@ class Exp_forecasting(object):
                 optimizer.step()
                 losses.append(loss.item())
 
+                global_iteration += 1
+                # 更新损失窗口
+                early_stopping.update_loss_window(loss.item())
+                # 每100个iteration检查一次早停
+                if global_iteration % 100 == 0:
+                    # 计算最近100个iteration的平均损失
+                    recent_avg_loss = np.mean(train_loss[-100:]) if len(train_loss) >= 100 else np.mean(train_loss)
+                    # iteration级别早停判断
+                    early_stopping(recent_avg_loss, model, model_path,model_name, is_iteration=True, current_iteration=global_iteration)
+                    if early_stopping.is_loss_stable(threshold=0.001): # 额外检查损失是否稳定
+                        print(f"损失已趋于稳定，考虑早停")
+                        early_stopping.early_stop = True
+                    if early_stopping.early_stop:
+                        print("iteration级别训练早停")
+                        break
+
                 if (iteration + 1) % self.args.log_interval == 0:
                     print(f"微调 Iter: {iteration+1}, Loss: {loss:.7f}")
             
@@ -421,22 +491,23 @@ class Exp_forecasting(object):
             print(f"微调 Vali Loss: {vali_loss:.7f}")
             print(f"微调时间: {time.time() - t:.2f}s")
             
-            self.early_stopping(vali_loss, model, self.folder_path)
-            if self.early_stopping.early_stop:
+            early_stopping(vali_loss, model, model_path,model_name,is_iteration=False,current_iteration=global_iteration)
+            if early_stopping.early_stop:
                 break
 
             adjust_learning_rate(optimizer, epoch + 1, self.args)
         
         training_time = time.time() - t
         print(f"微调总时间: {training_time:.2f}s")
-        return training_time
+        return training_time,full_model_path
 
     def train_stage1(self):
 
         epochs = self.args.train_epochs1
         optimizer = self.optimizer
         early_stopping = self.early_stopping
-       
+        model_path = os.path.join(self.folder_path, 'pretrained_ELFNet_family')
+        model_name = f"{self.args.model_used}_{os.path.splitext(self.args.data_path.split('/')[-1])[0]}"
         
         t = time.time()
         print('=============Starting to train ELFNet: stage1==============')
@@ -457,15 +528,31 @@ class Exp_forecasting(object):
                 train_loader=self.train_loader
             max_iterations = self.max_iterations
 
+        global_iteration = 0
         for epoch in range(epochs):
             train_loss = []
             for iteration, (batch_x, _,batch_y,_) in enumerate(train_loader): # batch_x: tensor (b, seq_len, c)   batch_x: (b,pred_len,1)
                 optimizer.zero_grad()
-                loss = self.model.compute_loss(batch_x, batch_y,self.folder_path,epoch)
+                loss = self.model.compute_loss(batch_x.to(self.device), batch_y.to(self.device),self.plot_dir,epoch)
                 train_loss.append(loss.item())
                 loss.backward()
                 optimizer.step()
                 losses.append(loss.item())
+                global_iteration += 1
+                # 更新损失窗口
+                early_stopping.update_loss_window(loss.item())
+                # 每100个iteration检查一次早停
+                if global_iteration % 100 == 0:
+                    # 计算最近100个iteration的平均损失
+                    recent_avg_loss = np.mean(train_loss[-100:]) if len(train_loss) >= 100 else np.mean(train_loss)
+                    # iteration级别早停判断
+                    early_stopping(recent_avg_loss, self.model, model_path,model_name, is_iteration=True, current_iteration=global_iteration)
+                    if early_stopping.is_loss_stable(threshold=0.001): # 额外检查损失是否稳定
+                        print(f"损失已趋于稳定，考虑早停")
+                        early_stopping.early_stop = True
+                    if early_stopping.early_stop:
+                        print("iteration级别训练早停")
+                        break # 跳出当前iteration
                 if (iteration+1) % self.args.log_interval==0:
                     print(f"Iter: {iteration+1}, Train Loss in Stage1 : {loss:.7f}")
                 
@@ -473,12 +560,17 @@ class Exp_forecasting(object):
             train_loss = np.average(train_loss)
             print(f"Epoch: {epoch+1}, Train Loss in stage1: {train_loss:.7f}")
 
-            self._plot_losses(losses, 'train_stage1')
+            if self.args.plot:
+                self._plot_losses(losses, 'train_stage1')
             
             print(f"Training time in stage1 until now: {time.time() - t:.2f}s")
            
-            early_stopping(train_loss, self.model,self.folder_path)
+            if early_stopping.early_stop : 
+                break
+
+            early_stopping(train_loss, self.model, model_path,model_name,is_iteration=False,current_iteration=global_iteration)
             if early_stopping.early_stop:
+                print("epoch级别训练早停")
                 break
 
             adjust_learning_rate(optimizer, epoch + 1, self.args)
@@ -491,9 +583,12 @@ class Exp_forecasting(object):
     def train_stage2(self):
         epochs = self.args.train_epochs2
         optimizer = self.optimizer
+        model_path = os.path.join(self.folder_path, 'finetuned_ELFNet_family')
+        model_name = f"{self.args.model_used}_{os.path.splitext(self.args.data_path.split('/')[-1])[0]}"
+        full_model_path = os.path.join(model_path,f"{model_name}.pth")
+
+        self.early_stopping = IterationEarlyStopping(patience_epochs=self.args.patience_epochs,patience_iterations=self.args.patience_iterations,min_iterations=self.args.min_iterations,verbose=True,delta=self.args.improved_delta)
         early_stopping = self.early_stopping
-        early_stopping.counter = 0
-        early_stopping.val_loss_min = np.Inf # 进行第二行阶段的训练之前更新一下early_stopping
  
         t = time.time()
         if self.args.model_path is not None:
@@ -514,6 +609,7 @@ class Exp_forecasting(object):
         else:
             train_loader=self.train_loader
 
+        global_iteration = 0
         for epoch in range(epochs):
             train_loss = []
             for iteration, (batch_x, _,batch_y,_) in enumerate(train_loader): 
@@ -521,7 +617,6 @@ class Exp_forecasting(object):
 
                 batch_x = batch_x.transpose(1, 2)
                 batch_x = batch_x.float().to(self.device)
-                #batch_y = (batch_y.float().to(self.device)).unsqueeze(2) # (b,pred_len,1))
                 batch_y = (batch_y.float().to(self.device))
                 outputs = self.model(batch_x)
                 
@@ -531,10 +626,27 @@ class Exp_forecasting(object):
                 optimizer.step()
                 losses.append(loss.item())
 
+                global_iteration += 1
+                # 更新损失窗口
+                early_stopping.update_loss_window(loss.item())
+                # 每100个iteration检查一次早停
+                if global_iteration % 100 == 0:
+                    # 计算最近100个iteration的平均损失
+                    recent_avg_loss = np.mean(train_loss[-100:]) if len(train_loss) >= 100 else np.mean(train_loss)
+                    # iteration级别早停判断
+                    early_stopping(recent_avg_loss, self.model,model_path,model_name, is_iteration=True, current_iteration=global_iteration)
+                    if early_stopping.is_loss_stable(threshold=0.001): # 额外检查损失是否稳定
+                        print(f"损失已趋于稳定，考虑早停")
+                        early_stopping.early_stop = True
+                    if early_stopping.early_stop:
+                        print("iteration级别训练早停")
+                        break
+
                 if (iteration+1) % self.args.log_interval==0:
                     print(f"Iter: {iteration+1}, Train Loss in Stage2: {loss:.7f}")
-                
-            self._plot_losses(losses,  'train_stage2')
+            
+            if self.args.plot:    
+                self._plot_losses(losses,  'train_stage2')
 
             train_loss = np.average(train_loss)
             print(f"Epoch: {epoch+1}, Train Loss in Stage2: {train_loss:.7f}")
@@ -544,7 +656,7 @@ class Exp_forecasting(object):
             print(f"Vali Loss: {vali_loss:.7f}")
             print(f"Training Time in Stage2 until now: {time.time() - t:.2f}s")
             
-            early_stopping(vali_loss, self.model, self.folder_path)
+            early_stopping(vali_loss, self.model, model_path,model_name,is_iteration=False,current_iteration=global_iteration)
             if early_stopping.early_stop :
                 break
 
@@ -553,7 +665,7 @@ class Exp_forecasting(object):
         training_time = time.time() - t
         print(f"Total training time in stage2: {training_time:.2f}s")
         
-        return training_time
+        return training_time,full_model_path
         
         
     def vali(self, vali_loader):
@@ -566,10 +678,15 @@ class Exp_forecasting(object):
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
 
-                if self.args.compare is None or self.args.compare == 'ELFNet_depthwise' or self.args.compare == 'ELFNet_no_disentanglement' or self.args.compare == 'ELFNet_no_contrastive' or self.args.compare == 'ELFNet_dilution':
-                    self.model.eval()
-                    outputs = self.model(batch_x)
-                    self.model.train()
+                if self.args.model_used in ['ELFNet','ELFNet_depthwise','ELFNet_no_disentanglement','ELFNet_no_contrastive','ELFNet_no_contrastive','ELFNet_dilution'] :
+                    if self.finetune_model is None: # single模式或者'ELFNet_no_contrastive'
+                        self.model.eval()
+                        outputs = self.model(batch_x)
+                        self.model.train()
+                    else:
+                        self.finetune_model.eval()
+                        outputs = self.finetune_model(batch_x)
+                        self.finetune_model.train()
                 else:
                     self.CompareModel.eval()
                     # decoder input
@@ -577,6 +694,7 @@ class Exp_forecasting(object):
                     #dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
                     outputs = self.CompareModel(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                     self.CompareModel.train()
+                
                 outputs = outputs[:, -self.args.pred_len:, :]
                 loss = self.criterion(outputs, batch_y)
                 total_loss.append(loss.item())
@@ -584,26 +702,38 @@ class Exp_forecasting(object):
         return total_loss
 
 
-    def test(self, setting, test=0):
+    def test(self,full_model_path, setting, test):
         test_data, test_loader = self._get_data(flag='test')
         if test:
             print('Loading model')
-            if self.args.compare is None or self.args.compare == 'ELFNet_depthwise' or self.args.compare == 'ELFNet_no_disentanglement'or self.args.compare == 'ELFNet_no_contrastive' or self.args.compare == 'ELFNet_dilution':
-                self.model.load_state_dict(torch.load(os.path.join(self.folder_path, 'model.pth')))
+            if self.args.model_used in ['ELFNet','ELFNet_depthwise','ELFNet_no_disentanglement','ELFNet_no_contrastive','ELFNet_no_contrastive','ELFNet_dilution'] :
+                if self.finetune_model is None:
+                    self.model.load_state_dict(torch.load(full_model_path))
+                else:
+                    self.finetune_model.load_state_dict(torch.load(full_model_path))
             else:
-                self.CompareModel.load_state_dict(torch.load(os.path.join(self.folder_path, 'model.pth')))
+                self.CompareModel.load_state_dict(torch.load(full_model_path))
         preds, trues = [], []
-        folder_path = './test_results/' + setting + '/'
+        
+        # derive folder_path from provided model_path (use model file name as prefix + "_test_results")
+        model_dir = os.path.dirname(os.path.abspath(full_model_path))
+        model_name = os.path.splitext(os.path.basename(full_model_path))[0]
+        folder_path = os.path.join(model_dir, f"{model_name}_test_results")
+        
         if not os.path.exists(folder_path):
-            os.makedirs(folder_path)
+            os.makedirs(folder_path, exist_ok=True)
         with torch.no_grad():
             for i,(batch_x, batch_x_mark,  batch_y,batch_y_mark )in enumerate(test_loader):
                 batch_x = batch_x.float().to(self.device).transpose(1, 2) 
                 batch_y = batch_y.float().to(self.device) 
                 batch_y = batch_y[:, -self.args.pred_len:, :].to(self.device)
-                if self.args.compare is None or self.args.compare == 'ELFNet_depthwise' or self.args.compare == 'ELFNet_no_disentanglement'or self.args.compare == 'ELFNet_no_contrastive' or self.args.compare == 'ELFNet_dilution':
-                    self.model.eval()
-                    outputs = self.model(batch_x)
+                if self.args.model_used in ['ELFNet','ELFNet_depthwise','ELFNet_no_disentanglement','ELFNet_no_contrastive','ELFNet_no_contrastive','ELFNet_dilution'] :
+                    if self.finetune_model is None:
+                        self.model.eval()
+                        outputs = self.model(batch_x)
+                    else:
+                        self.finetune_model.eval()
+                        outputs = self.finetune_model(batch_x)   
                 else:
                     self.CompareModel.eval()
                     batch_x_mark = batch_x_mark.float().to(self.device)
@@ -660,10 +790,7 @@ class Exp_forecasting(object):
         plt.ylabel('Loss')
         plt.title(f'{phase.capitalize()} Loss')
         plt.legend()
-        plot_dir = os.path.join(self.folder_path, 'loss_plot', phase)
-        if not os.path.exists(plot_dir):
-            os.makedirs(plot_dir)
-        plt.savefig(os.path.join(plot_dir, f'losses.png'))
+        plt.savefig(os.path.join(self.plot_dir, f'losses.png'))
         plt.close()
 
     def _get_default_groups(self,input_channels):

@@ -1,5 +1,4 @@
-import torch.nn.functional as F
-
+import os
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -48,42 +47,121 @@ def adjust_learning_rate(optimizer, epoch, args):
         print('Updating learning rate to {}'.format(lr))
 
 
-class EarlyStopping:
-    def __init__(self, patience, verbose=True, delta=0):
-        self.patience = patience
+
+class IterationEarlyStopping:
+    def __init__(self, patience_epochs=10, patience_iterations=1000, min_iterations=500, 
+                 verbose=True, delta=0, mode='min'):
+        """
+        混合早停机制：iteration级别判断 + epoch级别保存
+        
+        Args:
+            patience_epochs: epoch级别的容忍数
+            patience_iterations: iteration级别的容忍数  
+            min_iterations: 最少训练iteration数（避免过早停止）
+            verbose: 是否打印信息
+            delta: 最小改善阈值
+            mode: 'min'表示最小化损失，'max'表示最大化指标
+        """
+        self.patience_epochs = patience_epochs
+        self.patience_iterations = patience_iterations
+        self.min_iterations = min_iterations
         self.verbose = verbose
-        self.counter = 0
+        self.delta = delta
+        self.mode = mode
+        
+        self.counter_epochs = 0
+        self.counter_iterations = 0
         self.best_score = None
         self.early_stop = False
         self.val_loss_min = np.inf
-        self.delta = delta
+        self.global_iteration = 0
+        
+        # 用于iteration级别监控的滑动窗口
+        self.loss_window = []
+        self.window_size = 100  # 监控最近100个iteration的损失
 
-    def __call__(self, val_loss, model, path=None):
-        score = -val_loss
+    def __call__(self, current_loss, model,  model_path=None , model_name=None, is_iteration=False, current_iteration=0):
+        """
+        调用早停判断
+        
+        Args:
+            current_loss: 当前损失值
+            model: 模型
+            path: 保存路径
+            is_iteration: 是否为iteration级别调用
+            current_iteration: 当前全局iteration数
+        """
+        self.global_iteration = current_iteration
+        
+        if self.mode == 'min':
+            score = -current_loss
+        else:
+            score = current_loss
+        
+        # 第一次调用
         if self.best_score is None:
             self.best_score = score
-            if path is not None:
-                self.save_checkpoint(val_loss, model, path)
-        elif score < self.best_score + self.delta:
-            self.counter += 1
-            #if self.verbose:
-            #    print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
-            if self.counter >= self.patience :
-                self.early_stop = True
-                print('Early stopping')
-        else:
+            if model_path is not None and not is_iteration and model_name is not None:  # 只在epoch级别保存
+                self.save_checkpoint(current_loss, model, model_path,model_name)
+            return
+        
+        # 判断是否改善
+        improved = score > self.best_score + self.delta
+        
+        if improved:
+            # 有改善：更新最佳分数，重置计数器
             self.best_score = score
-            if path is not None:
-                self.save_checkpoint(val_loss, model, path)
-            self.counter = 0
+            self.counter_epochs = 0
+            self.counter_iterations = 0
+            if model_path is not None and not is_iteration and model_name is not None:  # 只在epoch级别保存模型
+                self.save_checkpoint(current_loss, model, model_path,model_name)
+        else:
+            # 无改善：增加计数器
+            if is_iteration:
+                self.counter_iterations += 1
+            else:
+                self.counter_epochs += 1
+        
+        # 判断是否早停
+        stop_by_epoch = self.counter_epochs >= self.patience_epochs
+        stop_by_iteration = (self.counter_iterations >= self.patience_iterations and 
+                           self.global_iteration >= self.min_iterations)
+        
+        if stop_by_epoch or stop_by_iteration:
+            self.early_stop = True
+            if self.verbose:
+                if stop_by_epoch:
+                    print(f'Early stopping: {self.counter_epochs} epochs without improvement')
+                else:
+                    print(f'Early stopping: {self.counter_iterations} iterations without improvement '
+                          f'(total: {self.global_iteration} iterations)')
 
-    def save_checkpoint(self, val_loss, model, path):
+    def update_loss_window(self, loss):
+        """更新损失滑动窗口"""
+        self.loss_window.append(loss)
+        if len(self.loss_window) > self.window_size:
+            self.loss_window.pop(0)
+    
+    def is_loss_stable(self, threshold=0.001):
+        """判断损失是否趋于稳定"""
+        if len(self.loss_window) < self.window_size:
+            return False
+        
+        recent_losses = np.array(self.loss_window)
+        # 计算最近窗口内损失的变异系数
+        if np.mean(recent_losses) > 0:
+            cv = np.std(recent_losses) / np.mean(recent_losses)
+            return cv < threshold
+        return False
+
+    def save_checkpoint(self, val_loss, model, model_path,model_name):
+        """保存模型检查点"""
         if self.verbose:
-            print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
-            torch.save(model.state_dict(), path  +'/'+ 'model.pth')
+            print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}). Saving model ...')
+            if not os.path.exists(model_path):
+                os.makedirs(model_path)
+            torch.save(model.state_dict(), f"{model_path}/{model_name}.pth")
         self.val_loss_min = val_loss
-
-
 
 class dotdict(dict):
     """dot.notation access to dictionary attributes"""

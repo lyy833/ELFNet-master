@@ -1,7 +1,6 @@
 import torch 
 from torch import nn
 import torch.nn.functional as F
-from ELFNet.dilated_conv import DilatedConvEncoder,MixedChannelConvEncoder
 from ELFNet.ELFNet import TrendFeatureDisentangler, BandedFourierLayer,FeatureReducer
 import torch.fft as fft
 from layers.depthwise import DepthwiseNet
@@ -13,10 +12,10 @@ import warnings
 warnings.filterwarnings('ignore')
     
 
-class LMLFNet_depthwise(nn.Module):
+class ELFNet_depthwise(nn.Module):
     def __init__(self,args, target, input_size, device, groups=None,stage2=False):
         ### 调用LMLFNet传入的input_size就是n_c(变量数)；depth是特征提取器的深度
-        super(LMLFNet_depthwise, self).__init__()
+        super(ELFNet_depthwise, self).__init__()
 
         self.args = args
         self.target=target # 目标变量

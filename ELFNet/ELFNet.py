@@ -363,12 +363,10 @@ class ELFNet_Base(nn.Module):
         loss = (logits[:, i, B + i - 1].mean() + logits[:, B + i, i].mean()) / 2
         return loss
     
-    def compute_loss(self, batch_x, batch_y, folder_path, epoch):
+    def compute_loss(self, batch_x, batch_y, plot_dir, epoch):
         """计算总损失 - 适配ELFNet-Base"""
         # 数据增强
-        batch_x, positive_batch_x, negative_batch_x_list = augment(
-            batch_x, batch_y, self.args.num_augment, folder_path
-        )
+        batch_x, positive_batch_x, negative_batch_x_list = augment(batch_x, batch_y, self.args.num_augment, plot_dir,self.args.plot)
         
         rand_idx = np.random.randint(0, batch_x.shape[1])
         
@@ -379,7 +377,7 @@ class ELFNet_Base(nn.Module):
             output_t = F.normalize(self.head(output_t[:, rand_idx]), dim=-1)
         
         # 计算正样本的输出
-        positive_batch_x = torch.from_numpy(positive_batch_x.astype('float32'))
+        #positive_batch_x = torch.from_numpy(positive_batch_x)
         output_positive_t, output_positive_s = self.forward(positive_batch_x.float().to(self.device))
         if output_positive_t is not None:
             output_positive_t = F.normalize(self.head(output_positive_t[:, rand_idx]), dim=-1)
@@ -423,7 +421,7 @@ class ELFNet(nn.Module):
         self.stage2 = stage2
         self.device = device
         
-        if args.compare is not None:
+        if args.model_used is not None:
             ### 使用DilatedConvEncoder作为特征提取器
             self.feature_extractor = DilatedConvEncoder(
                 input_size,
@@ -485,7 +483,7 @@ class ELFNet(nn.Module):
                     param.requires_grad = False
 
     def forward(self, x):# 输入的x的形状为 b,input_size,seq_len
-        if  self.args.compare is not None:
+        if  self.args.model_used is not None:
             y = self.feature_extractor(x) 
         
         else:
@@ -611,8 +609,8 @@ class ELFNet(nn.Module):
     
 
 
-    def compute_loss(self,batch_x,batch_y,folder_path,epoch):
-        batch_x, positive_batch_x, negative_batch_x_list= augment(batch_x,batch_y,self.args.num_augment,folder_path)
+    def compute_loss(self,batch_x,batch_y,plot_dir,epoch):
+        batch_x, positive_batch_x, negative_batch_x_list= augment(batch_x,batch_y,self.args.num_augment,plot_dir,self.args.plot)
         
         rand_idx = np.random.randint(0, batch_x.shape[1]) 
         
@@ -624,7 +622,7 @@ class ELFNet(nn.Module):
             output_t = F.normalize(self.head(output_t[:, rand_idx]), dim=-1)
         
         # 计算正样本的趋势性输出
-        positive_batch_x = torch.from_numpy(positive_batch_x.astype('float32'))
+        #positive_batch_x = torch.from_numpy(positive_batch_x.astype('float32'))
         positive_batch_x = positive_batch_x.transpose(1, 2)
         output_positive_t, output_positive_s= self.forward(positive_batch_x.float().to(self.device)) # (b,seq_len,repr_dims/2) 
         if output_positive_t is not None:

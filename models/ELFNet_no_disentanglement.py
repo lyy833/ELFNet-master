@@ -12,10 +12,10 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-class LMLFNet_no_disentanglement(nn.Module):
+class ELFNet_no_disentanglement(nn.Module):
     def __init__(self,args, target, input_size, device, groups=None,stage2=False):
         ### 调用CLMLFNet传入的input_size就是n_c(变量数)；depth是特征提取器的深度
-        super(LMLFNet_no_disentanglement, self).__init__()
+        super(ELFNet_no_disentanglement, self).__init__()
 
         self.args = args
         self.target=target # 目标变量

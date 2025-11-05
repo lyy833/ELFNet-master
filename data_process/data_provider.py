@@ -79,6 +79,7 @@ def data_provider(args, flag, cluster_data=False, pretrain_stage=False):
 
     :param args: 参数
     :param flag: 数据标志 'train', 'val', 'test'
+    :plot_dir: 数据增强可视化结果路径
     :param cluster_data: 是否基于聚类进行样本选择
     :param pretrain_stage: 是否为预训练阶段
     """

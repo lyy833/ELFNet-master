@@ -23,7 +23,7 @@ class CustomDataset(Dataset):
         self.data_path = data_path if data_path is not None else args.data_path
         self.pretrain_stage = pretrain_stage
         self.targetidx = args.target_idx  # 直接使用列下标
-            
+
         self.__read_data__()
 
         # 动态设置模型输入维度
@@ -59,10 +59,10 @@ class CustomDataset(Dataset):
                 date_strings = self.df_raw['date'].astype(str)
                 self.df_raw['date'] = pd.to_datetime(date_strings, format='%Y%m%d', errors='coerce')
             else:
-                # 对于字符串日期，尝试多种格式
+                # 对于字符串日期，尝试多种格式（并在失败时回退到 pandas 的自动解析以支持非零填充的日期如 '2006/1/1 0:00'）
                 date_formats = [
                     '%Y%m%d',  # 20120105
-                    '%Y/%m/%d %H:%M',  # 2006/8/11 18:30
+                    '%Y/%m/%d %H:%M',  # 2006/8/11 18:30 or 2006/1/1 0:00 (may be padded or not)
                     '%Y-%m-%d %H:%M:%S',  # 2019-01-01 01:00:00
                     '%Y-%m-%d',  # 2019-01-01
                 ]
@@ -70,11 +70,13 @@ class CustomDataset(Dataset):
                 parsed_successfully = False
                 for fmt in date_formats:
                     try:
-                        self.df_raw['date'] = pd.to_datetime(self.df_raw['date'], format=fmt, errors='coerce')
+                        # 先尝试使用指定格式解析
+                        parsed = pd.to_datetime(self.df_raw['date'], format=fmt, errors='coerce')
                         
                         # 检查解析结果
-                        null_count = self.df_raw['date'].isnull().sum()
+                        null_count = parsed.isnull().sum()
                         if null_count == 0:
+                            self.df_raw['date'] = parsed
                             print(f"Successfully parsed dates with format: {fmt}")
                             parsed_successfully = True
                             break
@@ -84,6 +86,20 @@ class CustomDataset(Dataset):
                     except Exception as e:
                         print(f"Format {fmt} error: {e}")
                         continue
+                
+                if not parsed_successfully:
+                    # 回退：让 pandas / dateutil 自动解析（能够处理像 '2006/1/1 0:00' 这种没有零填充的时间）
+                    try:
+                        parsed = pd.to_datetime(self.df_raw['date'], errors='coerce', infer_datetime_format=True)
+                        null_count = parsed.isnull().sum()
+                        if null_count == 0:
+                            self.df_raw['date'] = parsed
+                            print("Successfully parsed dates with pandas' automatic parser")
+                            parsed_successfully = True
+                        else:
+                            print(f"Automatic parsing produced {null_count} null values")
+                    except Exception as e:
+                        print(f"Automatic parsing error: {e}")
                 
                 if not parsed_successfully:
                     print("Warning: Could not parse date column with any format, using relative time")
