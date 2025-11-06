@@ -110,9 +110,8 @@ def _map_feature_extractor_weights(base_state_dict, new_state_dict, groups):
                 base_state_dict[key].shape == new_state_dict[target_key].shape):
                 new_state_dict[target_key] = base_state_dict[key]
                 print(f"  ✓ 复制共享卷积权重: {target_key}") 
-                
 
-    
+
 class TrendFeatureDisentangler(nn.Module):
     def __init__(self, args):
         super(TrendFeatureDisentangler, self).__init__()
@@ -421,8 +420,8 @@ class ELFNet(nn.Module):
         self.stage2 = stage2
         self.device = device
         
-        if args.model_used is not None:
-            ### 使用DilatedConvEncoder作为特征提取器
+        if args.model_used == 'ELFNet_dilution':
+            ### 使用DilatedConvEncoder作为特征提取器（通道依赖）
             self.feature_extractor = DilatedConvEncoder(
                 input_size,
                 args.hidden_dims,
@@ -430,7 +429,7 @@ class ELFNet(nn.Module):
                 args.depth,
                 args.kernel_size
             )
-        else:
+        else: ### 变量分组的通道混合
             self.feature_extractor = MixedChannelConvEncoder(
                 args.hidden_dims,
                 args.repr_dims,

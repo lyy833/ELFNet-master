@@ -56,7 +56,7 @@ if __name__ == "__main__":
     
     # 数据集设置
     ## 预训练模式选择
-    parser.add_argument('--pretrain_mode', type=str, default='single', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
+    parser.add_argument('--pretrain_mode', type=str, default='one2many', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
     ## one2many模式下的预训练数据集路径，此模式指 “单数据集预训练+其它数据集独立微调与测试”
     #parser.add_argument('--pretrain_data_path', type=str, default=None,help='预训练数据集路径，用于one2many模式')
     parser.add_argument('--pretrain_data_path', type=str, default='datasets_copy/Mathematical_Modeling_Competition.csv',help='预训练数据集路径，用于one2many模式')
@@ -64,8 +64,8 @@ if __name__ == "__main__":
     ### datasets/Mathematical_Modeling_Competition.csv
     ### datasets/Australia_Load&Price.csv
     ### datasets/XJ_Photovoltaic.csv
-    #parser.add_argument('--data_path', type=str, default='datasets_copy/Australia_Load&Price.csv', help='single 模式下的唯一数据集路径')
-    parser.add_argument('--data_path', type=str, default='datasets_copy/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径')
+    parser.add_argument('--data_path', type=str, default='datasets_copy/Australia_Load&Price.csv', help='single 模式下的唯一数据集路径')
+    #parser.add_argument('--data_path', type=str, default='datasets_copy/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径')
     parser.add_argument('--root_path', type=str,default='./', help='Root path to the dataset')
 
     # 数据预处理相关

@@ -793,5 +793,5 @@ class Exp_forecasting(object):
         plt.savefig(os.path.join(self.plot_dir, f'losses.png'))
         plt.close()
 
-    def _get_default_groups(self,input_channels):
+    def _get_groups(self,input_channels):
         pass

@@ -51,14 +51,13 @@ class ConvBlock(nn.Module):
                 x = F.gelu(x)
                 return x + residual
         
-'''
-这里定义的空洞/扩张卷积编码器DilatedConvEncoder在模型中充当特征提取器。
-它使用空洞卷积层来捕获输入数据中的多尺度上下文。根据需要，它可以从特定的层中提取中间输出，或者只提供最后一层的输出。
-'''
+
 class DilatedConvEncoder(nn.Module):
     def __init__(self, in_channels,hidden_dims,repr_dims,depth, kernel_size):
-        ### 1.类初始化
-        
+        '''
+        这里定义的空洞/扩张卷积编码器DilatedConvEncoder在模型中充当特征提取器。
+        它使用空洞卷积层来捕获输入数据中的多尺度上下文。根据需要，它可以从特定的层中提取中间输出，或者只提供最后一层的输出。
+        '''
         super().__init__()
 
         self.net = nn.Sequential(*[
