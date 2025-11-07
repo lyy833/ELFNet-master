@@ -202,10 +202,6 @@ class CustomDataset(Dataset):
         total_length = (len(self.data_x) - self.seq_len - self.pred_len) // self.stride + 1
         return max(0, total_length)
     
-    
-    def get_max_iterations(self, batch_size):
-        return math.ceil(len(self) / batch_size)
-    
     def extract_features(self):
         from scipy.fftpack import fft
         features = []

@@ -5,7 +5,7 @@ import os
 
 def main(args):
 
-    if args.model_path is not None:   # model_path: 已保存模型第二阶段的微调继续训练
+    if args.full_model_path is not None:   # model_path: 已保存预训练模型第二阶段的微调继续训练
       p = os.path.normpath(args.model_path)
       parts = p.split(os.sep)
       if 'test_results' in parts:
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     
     # 数据集设置
     ## 预训练模式选择
-    parser.add_argument('--pretrain_mode', type=str, default='one2many', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
+    parser.add_argument('--pretrain_mode', type=str, default='single', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
     ## one2many模式下的预训练数据集路径，此模式指 “单数据集预训练+其它数据集独立微调与测试”
     #parser.add_argument('--pretrain_data_path', type=str, default=None,help='预训练数据集路径，用于one2many模式')
     parser.add_argument('--pretrain_data_path', type=str, default='datasets_copy/Mathematical_Modeling_Competition.csv',help='预训练数据集路径，用于one2many模式')
@@ -101,8 +101,8 @@ if __name__ == "__main__":
     parser.add_argument('--improved_delta', type=float, default=0.05, help='Minimum improvement threshold in early stopping mechanism')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate, options: [type1, type2, cosine]')
-    #parser.add_argument('--model_path', type=str, default='', help='Saved pretrained model path for further finetune')
-    parser.add_argument('--model_path', type=str, default=None, help='Saved pretrained model path for further finetune')
+    #parser.add_argument('--full_model_path', type=str, default='', help='Saved pretrained model path for further finetune')
+    parser.add_argument('--full_model_path', type=str, default=None, help='Saved pretrained model path for further finetune')
     
     # GPU
     parser.add_argument('--num_workers', type=int, default=0, help='Number of workers for data loading')
@@ -147,7 +147,8 @@ if __name__ == "__main__":
     parser.add_argument('--inverse', action='store_true', help='inverse output data', default=False)
 
     # MixedChannelConv Machanism
-    parser.add_argument("--groups", type=str, default='[[0,1,2],[3],[4],[5]]', help='Comma-separated list of lists defining column groups')  # [[0,1,2],[3],[4],[5]]  or [[0,1],[2],[3],[4,5,6],[7]]
+    parser.add_argument("--pretrain_groups", type=str, default='[[0,1,2],[3],[4],[5]]', help='Comma-separated list of lists defining column groups for pretrain_data_path') 
+    parser.add_argument("--finetune_groups", type=str, default='[[0,1,2],[3],[4],[5]]', help='Comma-separated list of lists defining column groups for data_path')  # [[0,1,2],[3],[4],[5]]  or [[0,1],[2],[3],[4,5,6],[7]]
                         
     
     args = parser.parse_args()

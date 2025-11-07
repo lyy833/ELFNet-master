@@ -12,10 +12,9 @@ class Chomp1d(nn.Module):
         return x[:, :, :-self.chomp_size].contiguous()
 
 class FirstBlock(nn.Module):
-    def __init__(self, target, n_inputs, n_outputs, kernel_size, stride, dilation, padding):
+    def __init__(self,  n_inputs, n_outputs, kernel_size, stride, dilation, padding):
         super(FirstBlock, self).__init__()
-        
-        self.target = target
+
         self.conv1 = nn.Conv1d(n_inputs, n_outputs, kernel_size,
                                            stride=stride, padding=padding, dilation=dilation, groups=n_outputs)
 
@@ -72,7 +71,7 @@ class LastBlock(nn.Module):
         return self.linear(out.transpose(1,2)+x.transpose(1,2)).transpose(1,2) #residual connection
 
 class DepthwiseNet(nn.Module):
-    def __init__(self, target, num_inputs, num_levels, kernel_size=2, dilation_c=2):
+    def __init__(self, num_inputs, num_levels, kernel_size=2, dilation_c=2):
         super(DepthwiseNet, self).__init__()
         layers = []
         in_channels = num_inputs
@@ -80,7 +79,7 @@ class DepthwiseNet(nn.Module):
         for l in range(num_levels):
             dilation_size = dilation_c ** l
             if l==0:
-                layers += [FirstBlock(target, in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size,
+                layers += [FirstBlock( in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size,
                                      padding=(kernel_size-1) * dilation_size)]
             elif l==num_levels-1:
                 layers+=[LastBlock(in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size,
