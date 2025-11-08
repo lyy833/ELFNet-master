@@ -1,0 +1,2 @@
+ELFNet_Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None: 119.69, 12.12, 131.81
+ELFNet_Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None: 203.19, 12.70, 215.90

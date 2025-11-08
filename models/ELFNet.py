@@ -217,9 +217,6 @@ class ELFNet(nn.Module):
         if device == 'cuda:{}'.format(self.args.gpu):
             self._move_to_cuda()
 
-        # 微调阶段冻结 主干特征提取器(包括attention layer、input_fc、feature_extractor )和解耦器(包括tfd和sfd)的参数
-        if stage2:
-            self._freeze_pretrained_components
 
     
     def _move_to_cuda(self):
@@ -233,16 +230,67 @@ class ELFNet(nn.Module):
         if self.input_projection_list is not None:
             self.input_projection_list = self.input_projection_list.cuda()
     
-    def _freeze_pretrained_components(self):
-        """冻结预训练组件"""
-        components_to_freeze = [
-            self.feature_extractor, self.tfd, self.head, self.sfd
-        ]
-        for component in components_to_freeze:
+    def _freeze_pretrained_components(self, transferred_layers=None):
+        """智能冻结策略 - 只冻结迁移过来的层"""
+        # 总是冻结这些组件
+        always_freeze = [self.tfd, self.head, self.sfd]
+        for component in always_freeze:
             for param in component.parameters():
                 param.requires_grad = False
-        print("冻结预训练组件: feature_extractor, tfd, head, sfd")
+        
+        # 对特征提取器进行智能冻结
+        if self.feature_extractor is not None and transferred_layers:
+            for layer_info in transferred_layers:
+                if layer_info['type'] == 'group_conv':
+                    # 冻结迁移的分组卷积层
+                    layer_idx = layer_info['layer_idx']
+                    block_idx = layer_info['block_idx']
+                    component_name = layer_info['component']
+                    
+                    if (layer_idx < len(self.feature_extractor.group_convs) and
+                        block_idx < len(self.feature_extractor.group_convs[layer_idx])):
+                        
+                        block = self.feature_extractor.group_convs[layer_idx][block_idx]
+                        if component_name == 'conv1' and hasattr(block, 'conv1'):
+                            for param in block.conv1.parameters():
+                                param.requires_grad = False
+                        elif component_name == 'conv2' and hasattr(block, 'conv2'):
+                            for param in block.conv2.parameters():
+                                param.requires_grad = False
+                                
+                elif layer_info['type'] == 'final_conv':
+                    # 冻结迁移的final_conv
+                    component_name = layer_info['component']
+                    if component_name == 'weight':
+                        self.feature_extractor.final_conv.weight.requires_grad = False
+                    elif component_name == 'bias':
+                        self.feature_extractor.final_conv.bias.requires_grad = False
     
+        print("冻结预训练组件完成")
+
+
+    def _freeze_transferred_layers(self, transferred_layers):
+        """只冻结成功迁移的层"""
+        for layer_info in transferred_layers:
+            if layer_info['type'] == 'group_conv':
+                # 冻结迁移的分组卷积层
+                group_idx = layer_info['group_idx']
+                layer_idx = layer_info['layer_idx']
+                block_idx = layer_info['block_idx']
+                
+                if (group_idx < len(self.feature_extractor.group_convs) and
+                    layer_idx < len(self.feature_extractor.group_convs[group_idx]) and
+                    block_idx < len(self.feature_extractor.group_convs[group_idx][layer_idx])):
+                    
+                    block = self.feature_extractor.group_convs[group_idx][layer_idx][block_idx]
+                    for param in block.parameters():
+                        param.requires_grad = False
+                        
+            elif layer_info['type'] == 'final_conv':
+                # 冻结迁移的final_conv
+                for param in self.feature_extractor.final_conv.parameters():
+                    param.requires_grad = False
+
     def _init_input_projections(self, num_vars, hidden_dim):
         """动态初始化输入投影层,为每个变量进行独立地映射"""
         if self.input_projection_list is None:
@@ -251,24 +299,130 @@ class ELFNet(nn.Module):
             ]).to(self.device)
             print(f"动态初始化输入投影层: {num_vars} 个变量 -> 隐藏维度 {hidden_dim}")
     
-    def _init_feature_extractor(self,groups):
-        self.feature_extractor = MixedChannelConvEncoder(
-                self.args.hidden_dims,
-                self.args.repr_dims,
-                self.args.kernel_size,
-                groups,
-                self.args.depth,
-                self.device
-            ).to(self.device)
+    
+    def _transfer_encoder_weights(self, pretrained_state_dict, tgt_encoder):
+        """从state_dict迁移权重到目标编码器"""
+        transferred_layers = []
+        
+        # 处理可能的多GPU前缀
+        state_dict = {}
+        for k, v in pretrained_state_dict.items():
+            if k.startswith('module.'):
+                # 移除多GPU前缀
+                state_dict[k[7:]] = v
+            else:
+                state_dict[k] = v
+        
+        # 迁移分组卷积权重
+        for layer_idx in range(len(tgt_encoder.group_convs)):
+            tgt_group_conv = tgt_encoder.group_convs[layer_idx]
+            
+            # 只迁移深层
+            if layer_idx >= getattr(self.args, 'freeze_start_layer', 2):
+                for block_idx in range(len(tgt_group_conv)):
+                    block = tgt_group_conv[block_idx]
+                    
+                    # 构建状态字典中的键名
+                    conv1_key = f'feature_extractor.group_convs.{layer_idx}.{block_idx}.conv1.conv.weight'
+                    conv2_key = f'feature_extractor.group_convs.{layer_idx}.{block_idx}.conv2.conv.weight'
+                    
+                    # 迁移conv1
+                    if conv1_key in state_dict and hasattr(block, 'conv1'):
+                        src_weight = state_dict[conv1_key]
+                        if src_weight.shape == block.conv1.conv.weight.shape:
+                            block.conv1.conv.weight.data = src_weight.clone()
+                            transferred_layers.append({
+                                'type': 'group_conv',
+                                'layer_idx': layer_idx,
+                                'block_idx': block_idx,
+                                'component': 'conv1'
+                            })
+                    
+                    # 迁移conv2
+                    if conv2_key in state_dict and hasattr(block, 'conv2'):
+                        src_weight = state_dict[conv2_key]
+                        if src_weight.shape == block.conv2.conv.weight.shape:
+                            block.conv2.conv.weight.data = src_weight.clone()
+                            transferred_layers.append({
+                                'type': 'group_conv', 
+                                'layer_idx': layer_idx,
+                                'block_idx': block_idx,
+                                'component': 'conv2'
+                            })
+        
+        # 迁移final_conv权重
+        final_conv_weight_key = 'feature_extractor.final_conv.weight'
+        final_conv_bias_key = 'feature_extractor.final_conv.bias'
+        
+        if (final_conv_weight_key in state_dict and 
+            state_dict[final_conv_weight_key].shape == tgt_encoder.final_conv.weight.shape):
+            
+            tgt_encoder.final_conv.weight.data = state_dict[final_conv_weight_key].clone()
+            transferred_layers.append({'type': 'final_conv', 'component': 'weight'})
+        
+        if (final_conv_bias_key in state_dict and 
+            state_dict[final_conv_bias_key].shape == tgt_encoder.final_conv.bias.shape):
+            
+            tgt_encoder.final_conv.bias.data = state_dict[final_conv_bias_key].clone()
+            transferred_layers.append({'type': 'final_conv', 'component': 'bias'})
+        
+        return tgt_encoder, transferred_layers
 
-    def forward(self, x,groups):# 输入的x的形状为 b,seq_len,input_size
+
+    def _transfer_conv_block_weights(self, src_block, tgt_block):
+        """迁移卷积块权重，返回是否成功迁移"""
+        transferred = False
+        
+        # 迁移conv1
+        if (hasattr(src_block, 'conv1') and hasattr(tgt_block, 'conv1') and
+            src_block.conv1.conv.weight.shape == tgt_block.conv1.conv.weight.shape):
+            
+            tgt_block.conv1.conv.weight.data = src_block.conv1.conv.weight.data.clone()
+            if src_block.conv1.conv.bias is not None:
+                tgt_block.conv1.conv.bias.data = src_block.conv1.conv.bias.data.clone()
+            transferred = True
+        
+        # 迁移conv2  
+        if (hasattr(src_block, 'conv2') and hasattr(tgt_block, 'conv2') and
+            src_block.conv2.conv.weight.shape == tgt_block.conv2.conv.weight.shape):
+            
+            tgt_block.conv2.conv.weight.data = src_block.conv2.conv.weight.data.clone()
+            if src_block.conv2.conv.bias is not None:
+                tgt_block.conv2.conv.bias.data = src_block.conv2.conv.bias.data.clone()
+            transferred = True
+        
+        return transferred
+
+    def forward(self, x,groups,pretrained_state_dict=None):# 输入的x的形状为 b,seq_len,input_size
         """前向传播"""
         
         batch_size, seq_len, input_size = x.shape
         
         # 初始化输入投影层和特征提取器
         self._init_input_projections(input_size, self.args.hidden_dims)
-        self._init_feature_extractor(groups)
+        
+        # 初始化特征提取器
+        if self.feature_extractor is None:
+            self.feature_extractor = MixedChannelConvEncoder(
+                self.args.hidden_dims,
+                self.args.repr_dims, 
+                self.args.kernel_size,
+                groups,
+                self.args.depth,
+                self.device
+            ).to(self.device)
+        
+        # 如果有预训练权重，进行迁移
+        transferred_layers = []
+        if pretrained_state_dict is not None:
+            self.feature_extractor, transferred_layers = self._transfer_encoder_weights(
+                pretrained_state_dict, self.feature_extractor
+            )
+
+        # 在微调阶段执行智能冻结
+        if self.stage2 and not hasattr(self, '_frozen'):
+            self._freeze_pretrained_components(transferred_layers)
+            self._frozen = True
         
         # 应用输入投影
         projected_vars = []

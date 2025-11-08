@@ -47,9 +47,9 @@ class Exp_forecasting(object):
             self.pretrain_data, self.pretrain_loader = self._get_data(flag='train', cluster_data=True, pretrain_stage=True)
         else:
             self.pretrain_data, self.pretrain_loader = self._get_data(flag='train', pretrain_stage=True)
-        
         self.pretrain_groups = ast.literal_eval(self.args.pretrain_groups) if hasattr(self.args, 'pretrain_groups') and self.args.pretrain_groups else self._get_groups(self.pretrain_input_channels)
         self.finetune_data, self.finetune_loader = self._get_data(flag='train', pretrain_stage=False)
+        #self.finetune_input_channel = self.finetune_data.data_x.shape[1] 
         self.finetune_groups = ast.literal_eval(self.args.finetune_groups) if hasattr(self.args, 'finetune_groups') and self.args.finetune_groups else self._get_groups(self.finetune_input_channels)
         print(f"预训练数据集变量分组(下标): {self.pretrain_groups}")
         print(f"微调数据集变量分组(下标): {self.finetune_groups}")
@@ -66,9 +66,12 @@ class Exp_forecasting(object):
         """Initialization ELFNet family model """
         if self.args.model_used =='ELFNet' : # Complete version of ELFNet
             print('Standard VG-HCS ELFNet...')
-            self.model = ELFNet(self.args, device=self.device, stage2=False).to(self.device)
-            
-        # TODO 除ELFNet_no_contrastive以外的消融模型具备跨数据集实验能力，待补充
+            if self.args.pretrained_model_path is None:
+                self.model = ELFNet(self.args, device=self.device, stage2=False).to(self.device)
+            else:
+                self.model = ELFNet(self.args, device=self.device, stage2=True).to(self.device)
+        
+        # 除ELFNet_no_contrastive以外的消融模型具备跨数据集实验能力
         elif self.args.model_used == 'ELFNet_depthwise':
             print('ELFNet without VG-HCS in ablation experiment (CI)...')
             self.model = ELFNet_depthwise(self.args,device=self.device).to(self.device)
@@ -137,7 +140,7 @@ class Exp_forecasting(object):
         if not os.path.exists(model_path):
             os.makedirs(model_path)
         model_name = f"{self.args.model_used}_{os.path.splitext(self.args.data_path.split('/')[-1])[0]}"
-        full_model_path = os.path.join(model_path,f"{model_name}.pth")
+        pretrained_model_path = os.path.join(model_path,f"{model_name}.pth")
         
         t = time.time()
         print('=============Starting to train model_used Model==============')
@@ -214,13 +217,13 @@ class Exp_forecasting(object):
         total_training_time = time.time() - t
         print(f"Total Training Time: {total_training_time:.2f}s, 总迭代次数: {global_iteration}")
 
-        return total_training_time,full_model_path
+        return total_training_time,pretrained_model_path
     
 
     def _train_ELFNet_family(self):  
         """ ELFNet及其消融模型 训练流程，支持one2many 和 single 两种模式"""
         print(f"Pretrain mode:{self.args.pretrain_mode}")
-        if self.args.model_used == 'ELFNet_no_contrastive' or self.args.full_model_path is not None:
+        if self.args.model_used == 'ELFNet_no_contrastive' or self.args.pretrained_model_path is not None:
             training_time_stage1 = 0
             training_time_stage2,model_path = self.train_stage2()  
         else:
@@ -292,6 +295,8 @@ class Exp_forecasting(object):
         training_time = time.time() - t
         print(f"Total training Time in Stage1: {training_time:.2f}s")
         
+        if self.args.pretrained_model_path == None:
+            self.args.pretrained_model_path = os.path.join(model_path,f"{model_name}.pth")
         return training_time
     
     def train_stage2(self):
@@ -299,16 +304,18 @@ class Exp_forecasting(object):
         optimizer = self.optimizer
         model_path = os.path.join(self.folder_path, 'finetuned_ELFNet_family')
         model_name = f"{self.args.model_used}_{os.path.splitext(self.args.data_path.split('/')[-1])[0]}"
-        full_model_path = os.path.join(model_path,f"{model_name}.pth")
+        finetuned_model_path = os.path.join(model_path,f"{model_name}.pth")
 
         self.early_stopping = IterationEarlyStopping(patience_epochs=self.args.patience_epochs,patience_iterations=self.args.patience_iterations,min_iterations=self.args.min_iterations,verbose=True,delta=self.args.improved_delta)
         early_stopping = self.early_stopping
  
         t = time.time()
-        if self.args.model_path is not None:
-          print('Loading trained saved model to finetune')
-          self.model.load_state_dict(torch.load(self.args.full_model_path ))
         
+        print('加载预训练模型进行权重迁移以进一步微调')
+        pretrained_state_dict = torch.load(self.args.pretrained_model_path)
+
+        #self.model.load_state_dict(torch.load(self.args.pretrained_model_path ))
+    
         # 冻结 必要的层，冻结的层和预训练阶段二一致
         print(f"====Starting to train {self.args.model_used}: stage2====")
         self.model.train() 
@@ -324,10 +331,10 @@ class Exp_forecasting(object):
             for iteration, (batch_x, _,batch_y,_) in enumerate(self.finetune_loader): 
                 optimizer.zero_grad()
 
-                batch_x = batch_x.transpose(1, 2)
+                #batch_x = batch_x.transpose(1, 2)
                 batch_x = batch_x.float().to(self.device)
                 batch_y = (batch_y.float().to(self.device))
-                outputs = self.model(batch_x,self.finetune_groups)
+                outputs = self.model(batch_x,self.finetune_groups,pretrained_state_dict)
                 
                 loss = self.criterion(outputs, batch_y)
                 train_loss.append(loss.item())
@@ -374,14 +381,14 @@ class Exp_forecasting(object):
         training_time = time.time() - t
         print(f"Total training time in stage2: {training_time:.2f}s")
         
-        return training_time,full_model_path
+        return training_time,finetuned_model_path
         
         
     def vali(self, vali_loader):
         total_loss = []
         with torch.no_grad():
             for batch_x, batch_x_mark,batch_y,batch_y_mark in vali_loader:
-                batch_x = (batch_x.float().to(self.device)).transpose(1, 2) # (b,c,seq_len)
+                batch_x = (batch_x.float().to(self.device)) # (b,seq_len,c)
                 batch_y = batch_y.float().to(self.device)
                 batch_y = batch_y[:, -self.args.pred_len:, :].to(self.device)
                 batch_x_mark = batch_x_mark.float().to(self.device)
@@ -406,26 +413,26 @@ class Exp_forecasting(object):
         return total_loss
 
 
-    def test(self,full_model_path, setting, test):
+    def test(self,pretrained_model_path, setting, test):
         test_data, test_loader = self._get_data(flag='test')
         if test:
             print('Loading model')
             if self.args.model_used in ['ELFNet','ELFNet_depthwise','ELFNet_no_disentanglement','ELFNet_no_contrastive','ELFNet_no_contrastive','ELFNet_dilution'] :
-                self.model.load_state_dict(torch.load(full_model_path))
+                self.model.load_state_dict(torch.load(pretrained_model_path))
             else:
-                self.CompareModel.load_state_dict(torch.load(full_model_path))
+                self.CompareModel.load_state_dict(torch.load(pretrained_model_path))
         preds, trues = [], []
         
         # derive folder_path from provided model_path (use model file name as prefix + "_test_results")
-        model_dir = os.path.dirname(os.path.abspath(full_model_path))
-        model_name = os.path.splitext(os.path.basename(full_model_path))[0]
+        model_dir = os.path.dirname(os.path.abspath(pretrained_model_path))
+        model_name = os.path.splitext(os.path.basename(pretrained_model_path))[0]
         folder_path = os.path.join(model_dir, f"{model_name}_test_results")
         
         if not os.path.exists(folder_path):
             os.makedirs(folder_path, exist_ok=True)
         with torch.no_grad():
             for i,(batch_x, batch_x_mark,  batch_y,batch_y_mark )in enumerate(test_loader):
-                batch_x = batch_x.float().to(self.device).transpose(1, 2) 
+                batch_x = batch_x.float().to(self.device) 
                 batch_y = batch_y.float().to(self.device) 
                 batch_y = batch_y[:, -self.args.pred_len:, :].to(self.device)
                 if self.args.model_used in ['ELFNet','ELFNet_depthwise','ELFNet_no_disentanglement','ELFNet_no_contrastive','ELFNet_no_contrastive','ELFNet_dilution'] :
@@ -490,6 +497,35 @@ class Exp_forecasting(object):
         plt.savefig(os.path.join(self.plot_dir, f'losses.png'))
         plt.close()
 
-    def _get_groups(self,input_channels):
-        pass
+    def _get_groups(self, data_set, target_idx):
+        """
+        基于皮尔逊相关系数和互信息的变量自适应分组算法
+        返回分组列表，如 [[0,1,2], [3,4], [5]]
+        """
+        print("=== 开始变量自适应分组 ===")
+        
+        # 获取数据（不包括时间戳列）
+        data = data_set.data_x  # [样本数, 变量数]
+        n_samples, n_vars = data.shape
+        print(f"数据形状: {data.shape}, 目标变量索引: {target_idx}")
+        
+        # 1. 下采样平滑（如果数据量太大）
+        downsampled_data = self._downsample_data(data)
+        T_prime, n_vars_down = downsampled_data.shape
+        print(f"下采样后数据形状: {downsampled_data.shape}")
+        
+        # 2. 计算综合相似度矩阵
+        similarity_matrix = self._compute_similarity_matrix(downsampled_data, target_idx)
+        
+        # 3. 稀疏化处理
+        sparse_matrix = self._sparsify_similarity_matrix(similarity_matrix)
+        
+        # 4. 层次化聚类
+        groups = self._hierarchical_clustering(sparse_matrix, n_vars, target_idx)
+        
+        print(f"最终分组结果: {groups}")
+        print("=== 变量自适应分组完成 ===")
+        return groups
+
+
 

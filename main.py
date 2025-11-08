@@ -5,8 +5,8 @@ import os
 
 def main(args):
 
-    if args.full_model_path is not None:   # model_path: 已保存预训练模型第二阶段的微调继续训练
-      p = os.path.normpath(args.model_path)
+    if args.pretrained_model_path is not None:   # model_path: 已保存预训练模型第二阶段的微调继续训练
+      p = os.path.normpath(args.pretrained_model_path)
       parts = p.split(os.sep)
       if 'test_results' in parts:
           idx = parts.index('test_results')
@@ -35,12 +35,12 @@ def main(args):
 
     print(f"Training {setting}")
     if args.model_used in ['ELFNet','ELFNet_depthwise', 'ELFNet_no_disentanglement', 'ELFNet_no_contrastive', 'ELFNet_dilution']:
-      training_time_stage1, training_time_stage2, total_training_time,full_model_path = exp._train_ELFNet_family() #ELFNet或4个消融模型
+      training_time_stage1, training_time_stage2, total_training_time,pretrained_model_path = exp._train_ELFNet_family() #ELFNet或4个消融模型
     else:
-      total_training_time,full_model_path = exp._train_compare()
+      total_training_time,pretrained_model_path = exp._train_compare()
 
     print(f"Testing {setting}")
-    exp.test(full_model_path,setting,test=1)
+    exp.test(pretrained_model_path,setting,test=1)
 
     # 全局结果文件夹——直接保存在根目录下
     results_folder = "./"
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     
     # 数据集设置
     ## 预训练模式选择
-    parser.add_argument('--pretrain_mode', type=str, default='single', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
+    parser.add_argument('--pretrain_mode', type=str, default='one2many', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
     ## one2many模式下的预训练数据集路径，此模式指 “单数据集预训练+其它数据集独立微调与测试”
     #parser.add_argument('--pretrain_data_path', type=str, default=None,help='预训练数据集路径，用于one2many模式')
     parser.add_argument('--pretrain_data_path', type=str, default='datasets_copy/Mathematical_Modeling_Competition.csv',help='预训练数据集路径，用于one2many模式')
@@ -64,8 +64,8 @@ if __name__ == "__main__":
     ### datasets/Mathematical_Modeling_Competition.csv
     ### datasets/Australia_Load&Price.csv
     ### datasets/XJ_Photovoltaic.csv
-    parser.add_argument('--data_path', type=str, default='datasets_copy/Australia_Load&Price.csv', help='single 模式下的唯一数据集路径')
-    #parser.add_argument('--data_path', type=str, default='datasets_copy/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径')
+    #parser.add_argument('--data_path', type=str, default='datasets_copy/Australia_Load&Price.csv', help='single 模式下的唯一数据集路径')
+    parser.add_argument('--data_path', type=str, default='datasets_copy/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径')
     parser.add_argument('--root_path', type=str,default='./', help='Root path to the dataset')
 
     # 数据预处理相关
@@ -86,7 +86,7 @@ if __name__ == "__main__":
     parser.add_argument('--seq_len', type=int, default=96, help='Sequence length')
     parser.add_argument('--pred_len', type=int, default=48, help='Prediction length')
     parser.add_argument('--stride', type=int, default=1, help='Stride for sliding window')
-    parser.add_argument('--target_idx', type=int, default=5, help='Target feature')
+    parser.add_argument('--target_idx', type=int, default=5, help='The index of the target variable to predict in the dataset acorrding to data_path')
     
     # train settiings and optimization
     parser.add_argument('--temperature', type=float, default=0.7, help='temperature scaling factor')
@@ -101,12 +101,12 @@ if __name__ == "__main__":
     parser.add_argument('--improved_delta', type=float, default=0.05, help='Minimum improvement threshold in early stopping mechanism')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate, options: [type1, type2, cosine]')
-    #parser.add_argument('--full_model_path', type=str, default='', help='Saved pretrained model path for further finetune')
-    parser.add_argument('--full_model_path', type=str, default=None, help='Saved pretrained model path for further finetune')
+    #parser.add_argument('--pretrained_model_path', type=str, default='./test_results/Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None/pretrained_ELFNet_family/ELFNet_Mathematical_Modeling_Competition.pth', help='Saved pretrained model path for further finetune')
+    parser.add_argument('--pretrained_model_path', type=str, default=None, help='Saved pretrained model path for further finetune')
     
     # GPU
     parser.add_argument('--num_workers', type=int, default=0, help='Number of workers for data loading')
-    parser.add_argument('--use_gpu', type=bool, default=True, help='Whether to use GPU')
+    parser.add_argument('--use_gpu', type=bool, default=False, help='Whether to use GPU')
     parser.add_argument('--gpu', type=int, default=0, help='GPU device id')
     parser.add_argument('--use_multi_gpu', type=bool, default=False, help='Whether to use multiple GPUs')
     parser.add_argument('--devices', type=str, default='cpu', help='Device ids for multiple GPUs')
