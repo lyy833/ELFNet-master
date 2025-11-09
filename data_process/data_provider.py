@@ -86,7 +86,6 @@ def data_provider(args, flag, cluster_data=False, pretrain_stage=False):
     shuffle_flag = False if flag == 'test' else True
     drop_last = True
     batch_size = args.batch_size
-    freq = args.freq
     
     # 确定数据路径
     if pretrain_stage and args.pretrain_mode == 'one2many':

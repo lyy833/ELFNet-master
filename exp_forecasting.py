@@ -17,6 +17,7 @@ from models.ELFNet_ablation import *
 from models.ELFNet import  ELFNet
 from data_process.data_provider import data_provider
 import warnings
+from utils.variableGrouping import *
 
 warnings.filterwarnings('ignore')
 
@@ -47,10 +48,10 @@ class Exp_forecasting(object):
             self.pretrain_data, self.pretrain_loader = self._get_data(flag='train', cluster_data=True, pretrain_stage=True)
         else:
             self.pretrain_data, self.pretrain_loader = self._get_data(flag='train', pretrain_stage=True)
-        self.pretrain_groups = ast.literal_eval(self.args.pretrain_groups) if hasattr(self.args, 'pretrain_groups') and self.args.pretrain_groups else self._get_groups(self.pretrain_input_channels)
+        self.pretrain_groups = ast.literal_eval(self.args.pretrain_groups) if hasattr(self.args, 'pretrain_groups') and self.args.pretrain_groups else self._get_groups(self.pretrain_data,self.args.pretrain_target_idx)
         self.finetune_data, self.finetune_loader = self._get_data(flag='train', pretrain_stage=False)
         #self.finetune_input_channel = self.finetune_data.data_x.shape[1] 
-        self.finetune_groups = ast.literal_eval(self.args.finetune_groups) if hasattr(self.args, 'finetune_groups') and self.args.finetune_groups else self._get_groups(self.finetune_input_channels)
+        self.finetune_groups = ast.literal_eval(self.args.finetune_groups) if hasattr(self.args, 'finetune_groups') and self.args.finetune_groups else self._get_groups(self.finetune_data,self.args.finetune_target_idx)
         print(f"预训练数据集变量分组(下标): {self.pretrain_groups}")
         print(f"微调数据集变量分组(下标): {self.finetune_groups}")
 
@@ -240,6 +241,9 @@ class Exp_forecasting(object):
         model_path = os.path.join(self.folder_path, 'pretrained_ELFNet_family')
         model_name = f"{self.args.model_used}_{os.path.splitext(self.args.data_path.split('/')[-1])[0]}"
         
+        # 初始化输入投影层
+        self.model._init_input_projections(self.pretrain_data.data_x.shape[1], self.args.hidden_dims)
+
         t = time.time()
         print(f"=======Starting to train {self.args.model_used}: stage1=======")
         self.model.train()
@@ -308,7 +312,11 @@ class Exp_forecasting(object):
 
         self.early_stopping = IterationEarlyStopping(patience_epochs=self.args.patience_epochs,patience_iterations=self.args.patience_iterations,min_iterations=self.args.min_iterations,verbose=True,delta=self.args.improved_delta)
         early_stopping = self.early_stopping
- 
+
+        # 只有跨数据集情形重新初始化投影层
+        if self.args.pretrain_mode == 'one2many':
+            self.model._init_input_projections(self.finetune_data.data_x.shape[1],self.args.hidden_dims)
+        
         t = time.time()
         
         print('加载预训练模型进行权重迁移以进一步微调')
@@ -316,11 +324,9 @@ class Exp_forecasting(object):
 
         #self.model.load_state_dict(torch.load(self.args.pretrained_model_path ))
     
-        # 冻结 必要的层，冻结的层和预训练阶段二一致
         print(f"====Starting to train {self.args.model_used}: stage2====")
         self.model.train() 
 
-        # 冻结 必要的层
         self.model.stage2 = True
         
         losses = []
@@ -510,18 +516,17 @@ class Exp_forecasting(object):
         print(f"数据形状: {data.shape}, 目标变量索引: {target_idx}")
         
         # 1. 下采样平滑（如果数据量太大）
-        downsampled_data = self._downsample_data(data)
-        T_prime, n_vars_down = downsampled_data.shape
+        downsampled_data = downsample_data(data)
         print(f"下采样后数据形状: {downsampled_data.shape}")
         
         # 2. 计算综合相似度矩阵
-        similarity_matrix = self._compute_similarity_matrix(downsampled_data, target_idx)
+        similarity_matrix = compute_similarity_matrix(downsampled_data, self.args)
         
         # 3. 稀疏化处理
-        sparse_matrix = self._sparsify_similarity_matrix(similarity_matrix)
+        sparse_matrix = sparsify_similarity_matrix(similarity_matrix)
         
         # 4. 层次化聚类
-        groups = self._hierarchical_clustering(sparse_matrix, n_vars, target_idx)
+        groups = hierarchical_clustering(sparse_matrix, n_vars, target_idx,self.args)
         
         print(f"最终分组结果: {groups}")
         print("=== 变量自适应分组完成 ===")

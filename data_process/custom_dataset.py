@@ -13,16 +13,24 @@ class CustomDataset(Dataset):
         self.seq_len = args.seq_len
         self.pred_len = args.pred_len
         self.stride = args.stride
+        if pretrain_stage:
+            self.targetidx = self.args.pretrain_target_idx
+        else:
+            self.targetidx = self.args.finetune_target_idx
         
         assert flag in ['train', 'test', 'val']
         self.flag = flag
         self.set_type = {'train': 0, 'val': 1, 'test': 2}[flag]
         self.scale = args.scale
-        self.freq = args.freq  # 数据集采样频率参数中的频率
+        
+        if pretrain_stage:
+            self.freq = args.pretrain_freq  # 数据集采样频率参数中的频率
+        else:
+            self.freq = args. finetune_freq 
+        
         self.root_path = args.root_path
         self.data_path = data_path if data_path is not None else args.data_path
         self.pretrain_stage = pretrain_stage
-        self.targetidx = args.target_idx  # 直接使用列下标
 
         self.__read_data__()
 

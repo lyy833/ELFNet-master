@@ -230,6 +230,16 @@ class ELFNet(nn.Module):
         if self.input_projection_list is not None:
             self.input_projection_list = self.input_projection_list.cuda()
     
+    
+    def _init_input_projections(self, num_vars, hidden_dim):
+        """动态初始化输入投影层,为每个变量进行独立地映射"""
+        self.input_projection_list = nn.ModuleList([
+            nn.Linear(1, hidden_dim) for _ in range(num_vars)
+        ]).to(self.device)
+        print(f"动态初始化输入投影层: {num_vars} 个变量 -> 隐藏维度 {hidden_dim}")
+  
+
+
     def _freeze_pretrained_components(self, transferred_layers=None):
         """智能冻结策略 - 只冻结迁移过来的层"""
         # 总是冻结这些组件
@@ -290,15 +300,7 @@ class ELFNet(nn.Module):
                 # 冻结迁移的final_conv
                 for param in self.feature_extractor.final_conv.parameters():
                     param.requires_grad = False
-
-    def _init_input_projections(self, num_vars, hidden_dim):
-        """动态初始化输入投影层,为每个变量进行独立地映射"""
-        if self.input_projection_list is None:
-            self.input_projection_list = nn.ModuleList([
-                nn.Linear(1, hidden_dim) for _ in range(num_vars)
-            ]).to(self.device)
-            print(f"动态初始化输入投影层: {num_vars} 个变量 -> 隐藏维度 {hidden_dim}")
-    
+  
     
     def _transfer_encoder_weights(self, pretrained_state_dict, tgt_encoder):
         """从state_dict迁移权重到目标编码器"""
@@ -318,6 +320,7 @@ class ELFNet(nn.Module):
             tgt_group_conv = tgt_encoder.group_convs[layer_idx]
             
             # 只迁移深层
+            # 浅层网络（layer_idx < freeze_start_layer）重新初始化，不进行权重迁移，保持可训练状态
             if layer_idx >= getattr(self.args, 'freeze_start_layer', 2):
                 for block_idx in range(len(tgt_group_conv)):
                     block = tgt_group_conv[block_idx]
@@ -329,8 +332,8 @@ class ELFNet(nn.Module):
                     # 迁移conv1
                     if conv1_key in state_dict and hasattr(block, 'conv1'):
                         src_weight = state_dict[conv1_key]
-                        if src_weight.shape == block.conv1.conv.weight.shape:
-                            block.conv1.conv.weight.data = src_weight.clone()
+                        if src_weight.shape == block.conv1.conv.weight.shape: # 检查维度匹配性
+                            block.conv1.conv.weight.data = src_weight.clone() # 成功匹配则迁移权重并记录
                             transferred_layers.append({
                                 'type': 'group_conv',
                                 'layer_idx': layer_idx,
@@ -354,7 +357,7 @@ class ELFNet(nn.Module):
         final_conv_weight_key = 'feature_extractor.final_conv.weight'
         final_conv_bias_key = 'feature_extractor.final_conv.bias'
         
-        if (final_conv_weight_key in state_dict and 
+        if (final_conv_weight_key in state_dict and #检查维度兼容性和在目标目标模型中的存在性
             state_dict[final_conv_weight_key].shape == tgt_encoder.final_conv.weight.shape):
             
             tgt_encoder.final_conv.weight.data = state_dict[final_conv_weight_key].clone()
@@ -397,9 +400,6 @@ class ELFNet(nn.Module):
         """前向传播"""
         
         batch_size, seq_len, input_size = x.shape
-        
-        # 初始化输入投影层和特征提取器
-        self._init_input_projections(input_size, self.args.hidden_dims)
         
         # 初始化特征提取器
         if self.feature_extractor is None:

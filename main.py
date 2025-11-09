@@ -59,7 +59,7 @@ if __name__ == "__main__":
     parser.add_argument('--pretrain_mode', type=str, default='one2many', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
     ## one2many模式下的预训练数据集路径，此模式指 “单数据集预训练+其它数据集独立微调与测试”
     #parser.add_argument('--pretrain_data_path', type=str, default=None,help='预训练数据集路径，用于one2many模式')
-    parser.add_argument('--pretrain_data_path', type=str, default='datasets_copy/Mathematical_Modeling_Competition.csv',help='预训练数据集路径，用于one2many模式')
+    parser.add_argument('--pretrain_data_path', type=str, default='datasets_copy/Australia_Load&Price.csv',help='预训练数据集路径，用于one2many模式')
     ## data_path : single 模式下的数据集路径
     ### datasets/Mathematical_Modeling_Competition.csv
     ### datasets/Australia_Load&Price.csv
@@ -69,7 +69,8 @@ if __name__ == "__main__":
     parser.add_argument('--root_path', type=str,default='./', help='Root path to the dataset')
 
     # 数据预处理相关
-    parser.add_argument('--freq', type=str, default='d',choices=['t','h','d'], help='Frequency for time features(可选：[分钟t,小时h,天d])')
+    parser.add_argument('--pretrain_freq', type=str, default='t',choices=['t','h','d'], help='Frequency for time features of the pretrain dataset(可选：[分钟t,小时h,天d])')
+    parser.add_argument('--finetune_freq', type=str, default='d',choices=['t','h','d'], help='Frequency for time features of the finetune dataset(可选：[分钟t,小时h,天d])')
     parser.add_argument('--scale', type=str, default='True', help='Whether to perform data standardization')
     parser.add_argument('--num_augment', type=int, default=4, help='The number of augmented data samples')
     parser.add_argument('--cluster', type=str, default='False', help='Whether to use clustering to decrease samples')
@@ -86,7 +87,8 @@ if __name__ == "__main__":
     parser.add_argument('--seq_len', type=int, default=96, help='Sequence length')
     parser.add_argument('--pred_len', type=int, default=48, help='Prediction length')
     parser.add_argument('--stride', type=int, default=1, help='Stride for sliding window')
-    parser.add_argument('--target_idx', type=int, default=5, help='The index of the target variable to predict in the dataset acorrding to data_path')
+    parser.add_argument('--pretrain_target_idx', type=int, default=5, help='The index of the target variable to predict in the dataset acorrding to data_path')
+    parser.add_argument('--finetune_target_idx', type=int, default=5, help='The index of the target variable to predict in the dataset acorrding to data_path')
     
     # train settiings and optimization
     parser.add_argument('--temperature', type=float, default=0.7, help='temperature scaling factor')
@@ -101,9 +103,11 @@ if __name__ == "__main__":
     parser.add_argument('--improved_delta', type=float, default=0.05, help='Minimum improvement threshold in early stopping mechanism')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate, options: [type1, type2, cosine]')
-    #parser.add_argument('--pretrained_model_path', type=str, default='./test_results/Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None/pretrained_ELFNet_family/ELFNet_Mathematical_Modeling_Competition.pth', help='Saved pretrained model path for further finetune')
+    #parser.add_argument('--pretrained_model_path', type=str, default='test_results/Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None/pretrained_ELFNet_family/ELFNet_Mathematical_Modeling_Competition.pth', help='Saved pretrained model path for further finetune')
     parser.add_argument('--pretrained_model_path', type=str, default=None, help='Saved pretrained model path for further finetune')
-    
+    parser.add_argument('--freeze_start_layer', type=int, default=2,help='The starting index of the deep layer in the feature extractor during the fine-tuning stage')
+
+
     # GPU
     parser.add_argument('--num_workers', type=int, default=0, help='Number of workers for data loading')
     parser.add_argument('--use_gpu', type=bool, default=False, help='Whether to use GPU')
@@ -146,10 +150,17 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=2, help="Randomization seed")
     parser.add_argument('--inverse', action='store_true', help='inverse output data', default=False)
 
-    # MixedChannelConv Machanism
-    parser.add_argument("--pretrain_groups", type=str, default='[[0,1,2],[3],[4],[5]]', help='Comma-separated list of lists defining column groups for pretrain_data_path') 
-    parser.add_argument("--finetune_groups", type=str, default='[[0,1,2],[3],[4],[5]]', help='Comma-separated list of lists defining column groups for data_path')  # [[0,1,2],[3],[4],[5]]  or [[0,1],[2],[3],[4,5,6],[7]]
-                        
+    # Variable Grouping
+    #parser.add_argument("--pretrain_groups", type=str, default='[[0,1,2],[3],[4],[5]]', help='Comma-separated list of lists defining column groups for pretrain_data_path') 
+    #parser.add_argument("--finetune_groups", type=str, default='[[0,1,2],[3],[4],[5]]', help='Comma-separated list of lists defining column groups for data_path')  # [[0,1,2],[3],[4],[5]]  or [[0,1],[2],[3],[4,5,6],[7]]
+    parser.add_argument("--pretrain_groups", type=str, default=None, help='Comma-separated list of lists defining column groups for pretrain_data_path') 
+    parser.add_argument("--finetune_groups", type=str, default=None, help='Comma-separated list of lists defining column groups for data_path')  
+    parser.add_argument("--similarity_alpha", type=float, default=0.6, help='The weight of the Pearson coefficient in the comprehensive similarity')  
+    parser.add_argument("--cluster_theta", type=float, default=0.4, help='Minimum similarity threshold within the cluster')  
+    parser.add_argument("--cluster_gamma", type=float, default=0.5, help='Maximum inter-cluster similarity threshold') 
+    parser.add_argument("--cluster_kappa", type=int, default=5, help='Maximum cluster size') 
+    parser.add_argument("--cluster_delta", type=float, default=0.05, help='Dynamically adjust the step size during hierarchical clustering')  
+    parser.add_argument("--cluster_max_iter", type=int, default=100, help='Maximum number of clustering iterations')                    
     
     args = parser.parse_args()
     main(args)

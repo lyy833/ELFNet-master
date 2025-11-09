@@ -1,6 +1,0 @@
-Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None  
-mae:1.2068356275558472, mse:1.7601693868637085, rmse:1.3267138004302979, mape:0.9324278235435486, mspe:0.9119746088981628
-
-Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None  
-mae:1.182831883430481, mse:1.6952513456344604, rmse:1.302018165588379, mape:0.9131107330322266, mspe:0.890453577041626
-
