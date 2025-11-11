@@ -73,9 +73,9 @@ class MixedChannelConvEncoder(nn.Module):
         return output # Shape: (batch_size, channels, seq_len)
 
 
-class TrendFeatureDisentangler(nn.Module):
+class TrendRepresentationDisentangler(nn.Module):
     def __init__(self, args):
-        super(TrendFeatureDisentangler, self).__init__()
+        super(TrendRepresentationDisentangler, self).__init__()
         self.conv_layers = nn.ModuleList()
         for k in args.kernels:
             self.conv_layers.append(
@@ -101,7 +101,7 @@ class TrendFeatureDisentangler(nn.Module):
 
         return trend
 
-### SFD的实现
+### SRD的实现
 class BandedFourierLayer(nn.Module):
     def __init__(self, in_channels, out_channels, band, num_bands, length=201):
         super().__init__()
@@ -150,6 +150,54 @@ class BandedFourierLayer(nn.Module):
         bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
         nn.init.uniform_(self.bias, -bound, bound)
 
+class MultiBandSeasonalDisentangler(nn.Module):
+    def __init__(self, in_channels, out_channels, num_bands=3, length=201):
+        super().__init__()
+        self.length = length
+        self.num_bands = num_bands
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        
+        # 每个频带独立的傅里叶层
+        self.band_layers = nn.ModuleList([
+            BandedFourierLayer(in_channels, out_channels, b, num_bands, length=length)
+            for b in range(num_bands)
+        ])
+        
+        # 轻量级频带注意力（无外部上下文）
+        self.band_attention = nn.Sequential(
+            nn.Linear(in_channels, 32),
+            nn.ReLU(),
+            nn.Linear(32, num_bands),
+            nn.Softmax(dim=-1)
+        )
+
+    def forward(self, x):
+        """
+        x: [B, T, D] 输入特征
+        返回: [B, T, out_channels] 季节性表示，与原来维度一致
+        """
+        B, T, D = x.shape
+        
+        # 多频带分解
+        band_outputs = []
+        for layer in self.band_layers:
+            band_out = layer(x)  # [B, T, out_channels]
+            band_outputs.append(band_out)
+        
+        # 自适应频带融合
+        # 使用输入特征的统计信息作为注意力上下文
+        context = x.mean(dim=1)  # [B, D] - 时序平均作为上下文
+        attn_weights = self.band_attention(context)  # [B, num_bands]
+        
+        # 加权融合
+        seasonal_output = torch.zeros_like(band_outputs[0])
+        for i, band_out in enumerate(band_outputs):
+            weight = attn_weights[:, i].unsqueeze(-1).unsqueeze(-1)  # [B, 1, 1]
+            seasonal_output += weight * band_out
+        
+        return seasonal_output
+
 
 
 class FeatureReducer(nn.Module):
@@ -191,8 +239,8 @@ class ELFNet(nn.Module):
         ### 变量分组混合通道
         self.feature_extractor = None # 变量分组可能发生变化，前向传播中在具体确定
         
-        ### 趋势性部分的Trend Feature Disentangler使用num(kernels这个list中元素个数)个核大小为对应kernel的1D因果卷积层（没有先后顺序）构成，给定的的填充大小是kernel-1
-        self.tfd = TrendFeatureDisentangler(args)
+        ### Trend Representation Disentangler使用num(kernels这个list中元素个数)个核大小为对应kernel的1D因果卷积层（没有先后顺序）构成，给定的的填充大小是kernel-1
+        self.trd = TrendRepresentationDisentangler(args)
 
 
         # create the encoders
@@ -202,12 +250,19 @@ class ELFNet(nn.Module):
             nn.Linear(args.repr_dims // 2, args.repr_dims // 2)
         )
 
-        ### 季节性部分使用1个BandedFourierLayer提取季节性成分
-        self.sfd = nn.ModuleList(  ## nn.ModuleList详解：https://blog.csdn.net/weixin_36670529/article/details/105910767
-            [BandedFourierLayer(args.repr_dims,args.repr_dims // 2, b, 1, length=args.seq_len) for b in range(1)]
+        ### seasonal representation Disentangler使用多频带傅里叶层网络结构
+        self.srd = MultiBandSeasonalDisentangler(
+            in_channels=args.repr_dims,
+            out_channels=args.repr_dims // 2,
+            num_bands=3,  # 日、周、年三个频带
+            length=args.seq_len
         )
 
         self.repr_dropout = nn.Dropout(p=0.1)
+        # 趋势/季节性表示特征归一化层：解决两种表示特征量值差异大的问题
+        self.trend_norm = nn.LayerNorm(args.repr_dims // 2)
+        self.season_norm = nn.LayerNorm(args.repr_dims // 2)
+
 
         self.feature_reducer= FeatureReducer(args,args.hidden_dims)#将解耦表示的维度从repr_dims  映射回到 hidden_dims
         
@@ -230,7 +285,6 @@ class ELFNet(nn.Module):
         if self.input_projection_list is not None:
             self.input_projection_list = self.input_projection_list.cuda()
     
-    
     def _init_input_projections(self, num_vars, hidden_dim):
         """动态初始化输入投影层,为每个变量进行独立地映射"""
         self.input_projection_list = nn.ModuleList([
@@ -238,8 +292,6 @@ class ELFNet(nn.Module):
         ]).to(self.device)
         print(f"动态初始化输入投影层: {num_vars} 个变量 -> 隐藏维度 {hidden_dim}")
   
-
-
     def _freeze_pretrained_components(self, transferred_layers=None):
         """智能冻结策略 - 只冻结迁移过来的层"""
         # 总是冻结这些组件
@@ -278,7 +330,6 @@ class ELFNet(nn.Module):
     
         print("冻结预训练组件完成")
 
-
     def _freeze_transferred_layers(self, transferred_layers):
         """只冻结成功迁移的层"""
         for layer_info in transferred_layers:
@@ -301,7 +352,6 @@ class ELFNet(nn.Module):
                 for param in self.feature_extractor.final_conv.parameters():
                     param.requires_grad = False
   
-    
     def _transfer_encoder_weights(self, pretrained_state_dict, tgt_encoder):
         """从state_dict迁移权重到目标编码器"""
         transferred_layers = []
@@ -371,7 +421,6 @@ class ELFNet(nn.Module):
         
         return tgt_encoder, transferred_layers
 
-
     def _transfer_conv_block_weights(self, src_block, tgt_block):
         """迁移卷积块权重，返回是否成功迁移"""
         transferred = False
@@ -437,20 +486,19 @@ class ELFNet(nn.Module):
         #总的来说，下面代码片段的目标是捕获输入数据x在不同时间尺度上的趋势，并计算这些趋势的平均值。使用多尺度的方法是时间序列分析中的一种常见技巧，因为它允许模型在不同的时间尺度上捕获模式和依赖性。
         #提去趋势性成分特征
         trend = []
-        for idx, mod in enumerate(self.tfd.conv_layers):
+        for idx, mod in enumerate(self.trd.conv_layers):
             out = mod(y.to(self.device))
             if self.args.kernels[idx] != 1:
                 out = out[..., :-(self.args.kernels[idx] - 1)]
             trend.append(out.transpose(1, 2))
         trend = torch.mean(torch.stack(trend), dim=0)
-        y = y.transpose(1, 2)
-
+        trend = self.trend_norm(trend)  # 归一化
+        trend = self.repr_dropout(trend)  # 新增：趋势特征也应用dropout
+        
         ### 提取季节性成分的特征
-        season = []
-        for mod in self.sfd:
-            out = mod(y)  # b t d
-            season.append(out)
-        season = self.repr_dropout(season[0])
+        season = self.srd(y.transpose(1, 2)) # [B, T, repr_dims//2]
+        season = self.season_norm(season)  # 归一化
+        season = self.repr_dropout(season)
 
         if not self.stage2:
             return trend, season
@@ -461,146 +509,167 @@ class ELFNet(nn.Module):
             output = self.projection(output)  # 应用全连接层，使维度从 (batch_size, t, input_size) 转换为 (batch_size, t, 1)
             output = self.pool(output.transpose(1, 2)).transpose(1, 2)  # 使用自适应平均池化调整时间步数
             return output[:, -self.args.pred_len:, :]    
-    
-    
-    def caculate_trend_loss(self, anchor, pos, negs):
-        """
-        计算损失函数。这个函数用于衡量查询向量q与正向关键向量k和负向关键向量集k_negs之间的相似度。
-        它通过比较查询和正向关键向量的相似度与查询和负向关键向量集的相似度之和，来识别哪些负向关键向量是最难的负样本。
+
+    def compute_loss(self, batch_x, batch_y, plot_dir, groups, plot_augment_flag):
+        batch_x, positive_batch_x, negative_batch_x_list = augment(
+            batch_x, batch_y, self.args.num_augment, plot_dir, 
+            self.args.plot_augment, plot_augment_flag
+        )
         
-        参数:
-        anchor: 查询向量，形状为NxC。
-        pos: 正向关键向量，形状为NxC。
-        negs: 负向关键向量集，形状为CxL。
+        batch_x = batch_x.to(torch.float32)
+        batch_x = batch_x.transpose(1, 2).to(self.device)
         
-        返回:
-        loss: 使用交叉熵损失函数计算的损失值。
-        """
+        # 获取原样本表示
+        output_t, output_s = self.forward(batch_x, groups)  # [B, seq_len, repr_dims//2]
         
-        # 计算查询q和正向关键向量k之间的相似度，结果为一个长度为N的一维张量
-        # compute logits
-        # positive logits: Nx1
-        l_pos = torch.einsum('nc,nc->n', [anchor, pos]).unsqueeze(-1)
+        # 获取正样本表示
+        positive_batch_x = positive_batch_x.transpose(1, 2)
+        output_positive_t, output_positive_s = self.forward(positive_batch_x.float().to(self.device), groups)
         
-        # 计算查询q和负向关键向量集k_negs中每个关键向量的相似度，结果为一个形状为NxL的二维张量
-        # negative logits: NxK
-        l_neg = torch.einsum('nc,nkc->nk', [anchor, negs])
+        # 获取负样本表示
+        output_negative_t_list = []
+        output_negative_s_list = []
+        for negative_batch_x in negative_batch_x_list:
+            negative_batch_x = negative_batch_x.to(torch.float32)
+            negative_batch_x = negative_batch_x.transpose(1, 2)
+            output_negative_t, output_negative_s = self.forward(negative_batch_x.float().to(self.device), groups)
+            output_negative_t_list.append(output_negative_t)
+            output_negative_s_list.append(output_negative_s)
         
-        # 将正向相似度和所有负向相似度连接在一起，形成一个形状为Nx(1+L)的二维张量
-        # logits: Nx(1+K)
-        logits = torch.cat([l_pos, l_neg], dim=1)
+        # 改进的趋势对比损失计算
+        trend_loss = self._compute_trend_contrastive_loss(output_t, output_positive_t, output_negative_t_list)
         
-        # 应用温度参数T，用于调整logits的分布
-        # apply temperature
-        logits /= self.args.temperature
+        # 修正的季节性对比损失计算（时域）
+        seasonal_loss = self._compute_seasonal_contrastive_loss(output_s, output_positive_s, output_negative_s_list)
         
-        # 创建一个全零标签张量，用于指示每个样本的正确类别（即正向关键向量）
-        # labels: positive key indicators - first dim of each batch
-        #labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
-        labels = torch.zeros(logits.shape[0], dtype=torch.long,device=self.device)
+        # 计算总对比损失
+        loss = trend_loss + self.args.alpha * seasonal_loss
+        return loss
+
+    def _compute_trend_contrastive_loss(self, anchor_t, pos_t, neg_t_list):
+        """趋势对比损失 - 多时间步加权"""
+        B, seq_len, C = anchor_t.shape
         
-        # 使用交叉熵损失函数计算损失，其中logits是预测值，labels是标签
+        # 选择关键时间点（避免随机性）
+        key_indices = [0, seq_len//4, seq_len//2, 3*seq_len//4, -1]  # 均匀采样关键点
+        if len(key_indices) > seq_len:
+            key_indices = list(range(seq_len))
+        
+        losses = []
+        for idx in key_indices:
+            # 处理锚点
+            anchor_feat = anchor_t[:, idx, :]  # [B, C]
+            anchor_feat = F.normalize(self.head(anchor_feat), dim=-1)
+            
+            # 处理正样本
+            pos_feat = pos_t[:, idx, :]
+            pos_feat = F.normalize(self.head(pos_feat), dim=-1)
+            
+            # 处理负样本
+            neg_feats = []
+            for neg_t in neg_t_list:
+                neg_feat = neg_t[:, idx, :]
+                neg_feat = F.normalize(self.head(neg_feat), dim=-1)
+                neg_feats.append(neg_feat)
+            neg_feats_all = torch.stack(neg_feats, dim=1)  # [B, λ, C]
+            
+            # 计算该时间点的对比损失
+            point_loss = self.caculate_unified_contrastive_loss(
+                anchor_feat, pos_feat, neg_feats_all
+            )
+            losses.append(point_loss)
+        
+        # 对多个时间点的损失进行平均
+        return torch.mean(torch.stack(losses))
+
+    def _compute_seasonal_contrastive_loss(self, anchor_s, pos_s, neg_s_list):
+        """季节性对比损失 - 频域多分量对比，利用负样本"""
+        B, seq_len, C = anchor_s.shape
+        
+        # 转换为频域
+        anchor_freq = fft.rfft(anchor_s, dim=1)  # [B, freq_bins, C]
+        pos_freq = fft.rfft(pos_s, dim=1)
+        
+        # 获取幅度和相位
+        anchor_amp, anchor_phase = self.convert_coeff(anchor_freq)
+        pos_amp, pos_phase = self.convert_coeff(pos_freq)
+        
+        # 选择关键频率分量
+        freq_bins = anchor_amp.shape[1]
+        key_freq_indices = [0, freq_bins//4, freq_bins//2, -1]  # 低频、中频、高频
+        
+        losses = []
+        for freq_idx in key_freq_indices:
+            if freq_idx >= freq_bins:
+                continue
+                
+            # 幅度对比
+            anchor_amp_feat = anchor_amp[:, freq_idx, :]  # [B, C]
+            pos_amp_feat = pos_amp[:, freq_idx, :]
+            
+            # 处理负样本的幅度
+            neg_amp_feats = []
+            for neg_s in neg_s_list:
+                neg_freq = fft.rfft(neg_s, dim=1)
+                neg_amp, _ = self.convert_coeff(neg_freq)
+                neg_amp_feat = neg_amp[:, freq_idx, :]
+                neg_amp_feats.append(neg_amp_feat)
+            neg_amp_feats_all = torch.stack(neg_amp_feats, dim=1)  # [B, λ, C]
+            
+            amp_loss = self.caculate_unified_contrastive_loss(
+                anchor_amp_feat, pos_amp_feat, neg_amp_feats_all
+            )
+            
+            # 相位对比
+            anchor_phase_feat = anchor_phase[:, freq_idx, :]
+            pos_phase_feat = pos_phase[:, freq_idx, :]
+            
+            neg_phase_feats = []
+            for neg_s in neg_s_list:
+                neg_freq = fft.rfft(neg_s, dim=1)
+                _, neg_phase = self.convert_coeff(neg_freq)
+                neg_phase_feat = neg_phase[:, freq_idx, :]
+                neg_phase_feats.append(neg_phase_feat)
+            neg_phase_feats_all = torch.stack(neg_phase_feats, dim=1)
+            
+            phase_loss = self.caculate_unified_contrastive_loss(
+                anchor_phase_feat, pos_phase_feat, neg_phase_feats_all
+            )
+            
+            losses.append(amp_loss + phase_loss)
+        
+        return torch.mean(torch.stack(losses)) if losses else torch.tensor(0.0)
+
+
+    def caculate_unified_contrastive_loss(self, anchor, pos, negs, temperature=None):
+        """统一的对比损失函数，适用于趋势和季节性成分"""
+        if temperature is None:
+            temperature = self.args.temperature
+        
+        # 归一化所有特征
+        anchor = F.normalize(anchor, dim=-1)
+        pos = F.normalize(pos, dim=-1) 
+        negs = F.normalize(negs, dim=-1)
+        
+        # 计算相似度
+        pos_similarity = torch.sum(anchor * pos, dim=-1, keepdim=True)  # [B, 1]
+        neg_similarity = torch.sum(anchor.unsqueeze(1) * negs, dim=-1)  # [B, λ]
+        
+        # 合并logits
+        logits = torch.cat([pos_similarity, neg_similarity], dim=-1)  # [B, 1+λ]
+        
+        # 应用温度参数
+        logits = logits / temperature
+        
+        # 创建标签（正样本在位置0）
+        labels = torch.zeros(logits.shape[0], dtype=torch.long, device=anchor.device)
+        
+        # 计算交叉熵损失
         loss = F.cross_entropy(logits, labels)
         
-        # 返回计算得到的损失值
-        return loss
+        return loss 
 
     def convert_coeff(self, x, eps=1e-6):
         amp = torch.sqrt((x.real + eps).pow(2) + (x.imag + eps).pow(2))
         phase = torch.atan2(x.imag, x.real + eps)
         return amp, phase
-    
-    def caculate_seasonality_loss(self, z1, z2):
-        """
-        计算实例对比损失。
-
-        这个函数旨在通过比较同一实例的不同表示（z1和z2）来促进它们之间的相似性，
-        同时推动不同实例之间的表示差异性。它通过构建一个相似性矩阵，并从中提取出
-        对比损失来实现这一目标。
-
-        参数:
-        z1: Tensor, 形状为(B, T, C)的实例表示1，其中B是批次大小，T是序列长度，C是特征维度。
-        z2: Tensor, 形状为(B, T, C)的实例表示2，应与z1对应。
-
-        返回值:
-        loss: Tensor, 形状为()的标量Tensor，表示实例对比损失。
-        """
-        # 合并z1和z2，以便在批次维度上进行对比
-        B, T = z1.size(0), z1.size(1)
-        # 使用torch.cat将z1和z2沿批次维度B合并，得到形状为2B x T x C的张量z。
-        z = torch.cat([z1, z2], dim=0)  
-        # 转置z，以便在序列长度维度上进行矩阵乘法
-        # 将z进行转置，使其形状变为T x 2B x C
-        z = z.transpose(0, 1)  
-        # 计算z与自身转置的矩阵乘积，得到相似性矩阵
-        # 使用torch.matmul函数计算z与其转置(T x C x 2B)的点积，得到形状为T x 2B x 2B的相似性矩阵sim。这个矩阵表示每一对实例之间的相似性。
-        sim = torch.matmul(z, z.transpose(1, 2)) 
-        # 通过取下三角和上三角，构造对比学习所需的logits矩阵
-        # 下面两句使用torch.tril和torch.triu函数来取sim矩阵的下三角部分和上三角部分，
-        # 并进行拼接，得到形状为T x 2B x (2B-1)的对数矩阵logits。
-        # 这样，每一行的对数矩阵都不会包含对角线上的元素（自身的相似性）。 
-        logits = torch.tril(sim, diagonal=-1)[:, :, :-1]  
-        logits += torch.triu(sim, diagonal=1)[:, :, 1:]
-        # 对logits应用负对数 softmax，以得到对比损失的合适形式
-        # 使用-F.log_softmax对logits进行归一化处理，使每行的所有元素之和为1。
-        logits = -F.log_softmax(logits, dim=-1)
-        
-        # 计算每个实例的平均对比损失
-        # 对于每一个实例，在logits中找到与其对应的正例（相似的实例）和负例（不相似的实例）的相似性得分。
-        # 使用这些得分来计算总体的对比损失。
-        i = torch.arange(B, device=z1.device)
-        loss = (logits[:, i, B + i - 1].mean() + logits[:, B + i, i].mean()) / 2
-        return loss
-    
-
-
-    def compute_loss(self,batch_x,batch_y,plot_dir,groups):
-        batch_x, positive_batch_x, negative_batch_x_list= augment(batch_x,batch_y,self.args.num_augment,plot_dir,self.args.plot)
-        
-        rand_idx = np.random.randint(0, batch_x.shape[1]) 
-        
-        # 计算原样本的趋势性输出
-        batch_x = batch_x.to(torch.float32)
-        batch_x = batch_x.transpose(1, 2).to(self.device)
-        output_t, output_s= self.forward(batch_x,groups) # (b,seq_len,repr_dims/2) 
-        if output_t is not None:
-            output_t = F.normalize(self.head(output_t[:, rand_idx]), dim=-1)
-        
-        # 计算正样本的趋势性输出
-        #positive_batch_x = torch.from_numpy(positive_batch_x.astype('float32'))
-        positive_batch_x = positive_batch_x.transpose(1, 2)
-        output_positive_t, output_positive_s= self.forward(positive_batch_x.float().to(self.device),groups) # (b,seq_len,repr_dims/2) 
-        if output_positive_t is not None:
-            output_positive_t = F.normalize(self.head(output_positive_t[:, rand_idx]), dim=-1) #(batch_size,seq_len,repr_dims/2)
-        
-        # 计算所有负样本的趋势性输出
-        output_negative_t_list = []
-        for negative_batch_x in negative_batch_x_list:
-            # 计算每个负样本的趋势性输出
-            negative_batch_x = negative_batch_x.to(torch.float32)
-            negative_batch_x = negative_batch_x.transpose(1, 2)
-            output_negative_t, _= self.forward(negative_batch_x.float().to(self.device),groups) # (b,seq_len,repr_dims/2) 
-            if output_negative_t is not None:
-                output_negative_t = F.normalize(self.head(output_negative_t[:, rand_idx]), dim=-1) #(batch_size,repr_dims/2)
-            output_negative_t_list.append(output_negative_t)
-        output_negative_t_all = torch.stack(output_negative_t_list,dim=0) # (k,b,repr_dims/2)   其中k是负样本个数，k = num_augment
-        output_negative_t_all = output_negative_t_all.transpose(0,1) # (b,k,repr_dims/2)
-        #使用离散傅里叶变换等处理得到的原样本和正样本季节性输出矩阵
-        output_s = F.normalize(output_s, dim=-1) # (b,seq_len,repr_dims/2)
-        output_freq = fft.rfft(output_s, dim=1) # (b,seq_len//2+1,repr_dims/2)
-        output_positive_s = F.normalize(output_positive_s, dim=-1) 
-        output_positive_freq = fft.rfft(output_positive_s, dim=1)       
-        # 将原/正样本的季节性输出转换为样本的幅度和相位
-        output_amp, output_phase= self.convert_coeff(output_freq)
-        output_positive_amp, output_positive_phase= self.convert_coeff(output_positive_freq)
-        
-        # 计算季节性对比损失和趋势性对比损失
-        trend_loss = self.caculate_trend_loss(output_t,output_positive_t,output_negative_t_all)
-        seasonal_loss = self.caculate_seasonality_loss(output_amp, output_positive_amp)+ self.caculate_seasonality_loss(output_phase,output_positive_phase)
-        
-        # 计算总对比损失
-        loss =   trend_loss + self.args.alpha * seasonal_loss
-        return loss
-    
-
-    

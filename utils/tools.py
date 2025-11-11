@@ -49,7 +49,7 @@ def adjust_learning_rate(optimizer, epoch, args):
 
 
 class IterationEarlyStopping:
-    def __init__(self, patience_epochs=10, patience_iterations=1000, min_iterations=500, 
+    def __init__(self, patience_epochs=10, patience_iterations=50, min_iterations=500, 
                  verbose=True, delta=0, mode='min'):
         """
         混合早停机制：iteration级别判断 + epoch级别保存
@@ -71,14 +71,17 @@ class IterationEarlyStopping:
         
         self.counter_epochs = 0
         self.counter_iterations = 0
-        self.best_score = None
         self.early_stop = False
         self.val_loss_min = np.inf
         self.global_iteration = 0
+
+        # 分别维护iteration级别和epoch级别的最佳分数
+        self.best_score_iter = None  # iteration级别最佳分数
+        self.best_score_epoch = None  # epoch级别最佳分数
         
         # 用于iteration级别监控的滑动窗口
         self.loss_window = []
-        self.window_size = 100  # 监控最近100个iteration的损失
+        self.window_size = 20  # 监控最近20个iteration的损失
 
     def __call__(self, current_loss, model,  model_path=None , model_name=None, is_iteration=False, current_iteration=0):
         """
@@ -98,36 +101,40 @@ class IterationEarlyStopping:
         else:
             score = current_loss
         
-        # 第一次调用
-        if self.best_score is None:
-            self.best_score = score
-            if model_path is not None and not is_iteration and model_name is not None:  # 只在epoch级别保存
-                self.save_checkpoint(current_loss, model, model_path,model_name)
-            return
         
-        # 判断是否改善
-        improved = score > self.best_score + self.delta
-        
-        if improved:
-            # 有改善：更新最佳分数，重置计数器
-            self.best_score = score
-            self.counter_epochs = 0
-            self.counter_iterations = 0
-            if model_path is not None and not is_iteration and model_name is not None:  # 只在epoch级别保存模型
-                self.save_checkpoint(current_loss, model, model_path,model_name)
-        else:
-            # 无改善：增加计数器
-            if is_iteration:
-                self.counter_iterations += 1
+        if is_iteration: # iteration级早停调用处理
+            if self.best_score_iter is None: # 第一次 iteration级早停调用
+                self.best_score_iter = score
+            # iteration级别的改善判断
+            improved = score > self.best_score_iter + self.delta 
+            if improved: # 有改善：更新最佳分数，重置计数器
+                self.best_score_iter = score
+                self.counter_iterations = 0
             else:
-                self.counter_epochs += 1
+                self.counter_iterations += 1 # 无改善：增加 iteration 计数器
+        else: # epoch 级早停调用处理
+            if self.best_score_epoch is None: # 第一次 epoch级早停调用,一定会保存模型
+                self.best_score_epoch = score
+                if model_path is not None and model_name is not None: # 第一次epoch级别调用时保存模型
+                    self.save_checkpoint(current_loss, model, model_path, model_name)
+            else:
+                # epoch级别的改善判断
+                improved = score > self.best_score_epoch # epoch级别是否改善放宽松点，不需要delta偏离值
+                if improved:
+                    self.best_score_epoch = score
+                    self.counter_epochs = 0
+                    if model_path is not None and model_name is not None:
+                        self.save_checkpoint(current_loss, model, model_path, model_name)
+                    else:
+                        self.counter_epochs += 1
         
         # 判断是否早停
         stop_by_epoch = self.counter_epochs >= self.patience_epochs
         stop_by_iteration = (self.counter_iterations >= self.patience_iterations and 
                            self.global_iteration >= self.min_iterations)
         
-        if stop_by_epoch or stop_by_iteration:
+    
+        if stop_by_epoch or stop_by_iteration :
             self.early_stop = True
             if self.verbose:
                 if stop_by_epoch:
@@ -135,6 +142,7 @@ class IterationEarlyStopping:
                 else:
                     print(f'Early stopping: {self.counter_iterations} iterations without improvement '
                           f'(total: {self.global_iteration} iterations)')
+                    
 
     def update_loss_window(self, loss):
         """更新损失滑动窗口"""

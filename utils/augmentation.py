@@ -151,7 +151,7 @@ def polynomial_transform(x, degree=2):
         return np.power(x, degree)
 
 
-def augment(x, y, negative_num, plot_dir, plot):
+def augment(x, y, negative_num, plot_dir,plot_augment, plot_augment_flag):
     import matplotlib.pyplot as plt
     import os
 
@@ -180,15 +180,15 @@ def augment(x, y, negative_num, plot_dir, plot):
         x_augment_n_list.append(x_augment_n)
 
     # 可视化原始数据和增强数据
-    batch_size, seq_len, num_features = x.shape
+    batch_size, num_features, seq_len = x.shape
 
-    if plot:
+    if plot_augment_flag and plot_augment:
         for i in range(num_features):
             for j in range(negative_num):
                 plt.figure(figsize=(15, 5))
-                plt.plot(to_numpy(x)[0, :, i], label='Original', linestyle='-', marker='o')
-                plt.plot(to_numpy(x_augment_p)[0, :, i], label='Positive Augment', linestyle='--', marker='x')
-                plt.plot(to_numpy(x_augment_n_list[j])[0, :, i], label='Negative Augment', linestyle=':', marker='s')
+                plt.plot(to_numpy(x)[0, i,:], label='Original', linestyle='-', marker='o')
+                plt.plot(to_numpy(x_augment_p)[0, i,:], label='Positive Augment', linestyle='--', marker='x')
+                plt.plot(to_numpy(x_augment_n_list[j])[0, i,:], label='Negative Augment', linestyle=':', marker='s')
                 plt.title(f'Feature {i + 1} Negative Augment {j + 1}')
                 plt.xlabel('Time')
                 plt.ylabel('Value')

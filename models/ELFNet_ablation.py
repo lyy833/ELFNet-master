@@ -1,7 +1,7 @@
 import torch 
 from torch import nn
 import torch.nn.functional as F
-from models.ELFNet import TrendFeatureDisentangler, BandedFourierLayer,FeatureReducer,MixedChannelConvEncoder
+from models.ELFNet import TrendRepresentationDisentangler, BandedFourierLayer,FeatureReducer,MixedChannelConvEncoder
 import torch.fft as fft
 from layers.depthwise import DepthwiseNet
 from layers.dilated_conv import DilatedConvEncoder
@@ -242,7 +242,7 @@ class ELFNet_no_contrastive(nn.Module):
         self.feature_extractor = None
         
         ### 趋势性部分的Trend Feature Disentangler使用num(kernels这个list中元素个数)个核大小为对应kernel的1D因果卷积层（没有先后顺序）构成，给定的的填充大小是kernel-1
-        self.tfd = TrendFeatureDisentangler(args)
+        self.tfd = TrendRepresentationDisentangler(args)
 
 
         # create the encoders
@@ -351,7 +351,7 @@ class ELFNet_Dilation(nn.Module):
         self.feature_extractor = None 
         
         ### 趋势性部分的Trend Feature Disentangler使用num(kernels这个list中元素个数)个核大小为对应kernel的1D因果卷积层（没有先后顺序）构成，给定的的填充大小是kernel-1
-        self.tfd = TrendFeatureDisentangler(args)
+        self.tfd = TrendRepresentationDisentangler(args)
 
 
         # create the encoders
@@ -616,7 +616,7 @@ class ELFNet_depthwise(nn.Module):
         self.pointwise = None
         
         ### 趋势性部分的Trend Feature Disentangler使用num(kernels这个list中元素个数)个核大小为对应kernel的1D因果卷积层（没有先后顺序）构成，给定的的填充大小是kernel-1
-        self.tfd = TrendFeatureDisentangler(args)
+        self.tfd = TrendRepresentationDisentangler(args)
 
 
         # create the encoders

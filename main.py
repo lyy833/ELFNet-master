@@ -24,23 +24,25 @@ def main(args):
       os.makedirs(folder_path)
     # 设置可视化结果保存路径并创建相应的文件夹（数据增强可视化以及loss曲线可视化）
     
-    if args.pretrain_mode == 'single':
-      plot_dir = os.path.join(folder_path, f"{os.path.splitext(args.pretrain_data_path.split('/')[-1])[0]}_plot")
+    if args.plot_augment or args.plot_loss:
+      if args.pretrain_mode == 'one2many':
+        plot_dir = os.path.join(folder_path, f"{os.path.splitext(args.pretrain_data_path.split('/')[-1])[0]}_plot")
+      else:
+        plot_dir = os.path.join(folder_path, f"{os.path.splitext(args.data_path.split('/')[-1])[0]}_plot")
+      if not os.path.exists(plot_dir):
+        os.makedirs(plot_dir)
     else:
-      plot_dir = os.path.join(folder_path, f"{os.path.splitext(args.data_path.split('/')[-1])[0]}_plot")
-    if not os.path.exists(plot_dir):
-      os.makedirs(plot_dir)
-
+       plot_dir=None
     exp = Exp_forecasting(args,setting,folder_path,plot_dir)
 
     print(f"Training {setting}")
     if args.model_used in ['ELFNet','ELFNet_depthwise', 'ELFNet_no_disentanglement', 'ELFNet_no_contrastive', 'ELFNet_dilution']:
-      training_time_stage1, training_time_stage2, total_training_time,pretrained_model_path = exp._train_ELFNet_family() #ELFNet或4个消融模型
+      training_time_stage1, training_time_stage2, total_training_time,model_path = exp._train_ELFNet_family() #ELFNet或4个消融模型
     else:
-      total_training_time,pretrained_model_path = exp._train_compare()
+      total_training_time,model_path = exp._train_compare()
 
     print(f"Testing {setting}")
-    exp.test(pretrained_model_path,setting,test=1)
+    exp.test(model_path,setting,test=1)
 
     # 全局结果文件夹——直接保存在根目录下
     results_folder = "./"
@@ -59,13 +61,13 @@ if __name__ == "__main__":
     parser.add_argument('--pretrain_mode', type=str, default='one2many', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
     ## one2many模式下的预训练数据集路径，此模式指 “单数据集预训练+其它数据集独立微调与测试”
     #parser.add_argument('--pretrain_data_path', type=str, default=None,help='预训练数据集路径，用于one2many模式')
-    parser.add_argument('--pretrain_data_path', type=str, default='datasets_copy/Australia_Load&Price.csv',help='预训练数据集路径，用于one2many模式')
+    parser.add_argument('--pretrain_data_path', type=str, default='datasets/Australia_Load&Price.csv',help='预训练数据集路径，用于one2many模式')
     ## data_path : single 模式下的数据集路径
     ### datasets/Mathematical_Modeling_Competition.csv
     ### datasets/Australia_Load&Price.csv
     ### datasets/XJ_Photovoltaic.csv
     #parser.add_argument('--data_path', type=str, default='datasets_copy/Australia_Load&Price.csv', help='single 模式下的唯一数据集路径')
-    parser.add_argument('--data_path', type=str, default='datasets_copy/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径')
+    parser.add_argument('--data_path', type=str, default='datasets/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径')
     parser.add_argument('--root_path', type=str,default='./', help='Root path to the dataset')
 
     # 数据预处理相关
@@ -78,8 +80,9 @@ if __name__ == "__main__":
     parser.add_argument('--anchor', type=str, default=None, help='Center for clustering, optional choices: [random, center]')
     
     # basic config
-    parser.add_argument('--alpha', type=float, default=0.05, help='Weighting hyperparameter for loss function')
-    parser.add_argument('--plot', type=bool, default=False,help='Whether to plot ')
+    parser.add_argument('--alpha', type=float, default=0.5, help='Weighting hyperparameter for loss function')
+    parser.add_argument('--plot_augment', type=bool, default=False,help='Whether to plot ')
+    parser.add_argument('--plot_loss', type=bool, default=True,help='Whether to plot ')
     parser.add_argument('--model_used', type=str, default='ELFNet', help='Model to use (e.g., TimesNet)') 
     parser.add_argument('--log_interval',type = int, default=5, help='Log interval for training')
     
@@ -94,26 +97,26 @@ if __name__ == "__main__":
     parser.add_argument('--temperature', type=float, default=0.7, help='temperature scaling factor')
     parser.add_argument('--optimizername', type=str, default='Adam', help='The type of optimizer')
     parser.add_argument('--train_epochs1', type=int, default=1, help='Number of epochs for pretrain ELFNet using contrasitive learning')
-    parser.add_argument('--train_epochs2', type=int, default=1, help='Number of epochs for pretrain ELFNet using supervised learning')
+    parser.add_argument('--train_epochs2', type=int, default=50, help='Number of epochs for pretrain ELFNet using supervised learning')
     parser.add_argument('--epochs', type=int, default=4, help='Number of total epochs for training compare model')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
-    parser.add_argument('--patience_epochs', type=int, default=10, help='early stopping patience - epoch level')
-    parser.add_argument('--patience_iterations', type=int, default=500, help='early stopping patience - iteration level')
-    parser.add_argument('--min_iterations', type=int, default=1000, help='minimum number of iterations in early stopping mechanism')
+    parser.add_argument('--patience_epochs', type=int, default=5, help='early stopping patience - epoch level')
+    parser.add_argument('--patience_iterations', type=int, default=50, help='early stopping patience - iteration level')
+    parser.add_argument('--min_iterations', type=int, default=500, help='minimum number of iterations in early stopping mechanism')
     parser.add_argument('--improved_delta', type=float, default=0.05, help='Minimum improvement threshold in early stopping mechanism')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate, options: [type1, type2, cosine]')
-    #parser.add_argument('--pretrained_model_path', type=str, default='test_results/Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None/pretrained_ELFNet_family/ELFNet_Mathematical_Modeling_Competition.pth', help='Saved pretrained model path for further finetune')
+    #parser.add_argument('--pretrained_model_path', type=str, default='./test_results/Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None/pretrained_ELFNet_family/ELFNet_Mathematical_Modeling_Competition.pth', help='Saved pretrained model path for further finetune')
     parser.add_argument('--pretrained_model_path', type=str, default=None, help='Saved pretrained model path for further finetune')
     parser.add_argument('--freeze_start_layer', type=int, default=2,help='The starting index of the deep layer in the feature extractor during the fine-tuning stage')
 
 
     # GPU
     parser.add_argument('--num_workers', type=int, default=0, help='Number of workers for data loading')
-    parser.add_argument('--use_gpu', type=bool, default=False, help='Whether to use GPU')
+    parser.add_argument('--use_gpu', type=bool, default=True, help='Whether to use GPU')
     parser.add_argument('--gpu', type=int, default=0, help='GPU device id')
     parser.add_argument('--use_multi_gpu', type=bool, default=False, help='Whether to use multiple GPUs')
-    parser.add_argument('--devices', type=str, default='cpu', help='Device ids for multiple GPUs')
+    parser.add_argument('--devices', type=str, default='0', help='Device ids for multiple GPUs')
     
     # model define
     parser.add_argument('--depth', type=int, default=8, help='Number of hidden layers in the FeatureExtractor')

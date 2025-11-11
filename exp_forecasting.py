@@ -207,7 +207,7 @@ class Exp_forecasting(object):
 
             early_stopping(vali_loss, self.CompareModel, model_path,model_name,is_iteration=False,current_iteration=global_iteration)
             
-            if self.args.plot: # 可视化训练损失
+            if self.args.plot_loss: # 可视化训练损失
                 self._plot_losses(losses, 'compare_train')
             
             if early_stopping.early_stop :
@@ -240,7 +240,8 @@ class Exp_forecasting(object):
         early_stopping = self.early_stopping
         model_path = os.path.join(self.folder_path, 'pretrained_ELFNet_family')
         model_name = f"{self.args.model_used}_{os.path.splitext(self.args.data_path.split('/')[-1])[0]}"
-        
+        if self.args.pretrained_model_path == None:
+            self.args.pretrained_model_path = os.path.join(model_path,f"{model_name}.pth")
         # 初始化输入投影层
         self.model._init_input_projections(self.pretrain_data.data_x.shape[1], self.args.hidden_dims)
 
@@ -250,11 +251,14 @@ class Exp_forecasting(object):
         losses = []
 
         global_iteration = 0
+        plot_augment_flag = True # 用于仅仅在第一次前向传播时可视化增强数据
         for epoch in range(epochs):
             train_loss = []
             for iteration, (batch_x, _,batch_y,_) in enumerate(self.pretrain_loader): # batch_x: tensor (b, seq_len, c)   batch_x: (b,pred_len,1)
                 optimizer.zero_grad()
-                loss = self.model.compute_loss(batch_x.to(self.device).transpose(1,2), batch_y.to(self.device),self.plot_dir,self.pretrain_groups)
+                loss = self.model.compute_loss(batch_x.to(self.device).transpose(1,2), batch_y.to(self.device),self.plot_dir,self.pretrain_groups,plot_augment_flag)
+                if plot_augment_flag:
+                    plot_augment_flag = False
                 train_loss.append(loss.item())
                 loss.backward()
                 optimizer.step()
@@ -281,7 +285,7 @@ class Exp_forecasting(object):
             train_loss = np.average(train_loss)
             print(f"Epoch: {epoch+1}, Train Loss in stage1: {train_loss:.7f}")
 
-            if self.args.plot:
+            if self.args.plot_loss:
                 self._plot_losses(losses, 'train_stage1')
             
             print(f"Training time in stage1 until now: {time.time() - t:.2f}s")
@@ -299,8 +303,6 @@ class Exp_forecasting(object):
         training_time = time.time() - t
         print(f"Total training Time in Stage1: {training_time:.2f}s")
         
-        if self.args.pretrained_model_path == None:
-            self.args.pretrained_model_path = os.path.join(model_path,f"{model_name}.pth")
         return training_time
     
     def train_stage2(self):
@@ -367,7 +369,7 @@ class Exp_forecasting(object):
                 if (iteration+1) % self.args.log_interval==0:
                     print(f"Iter: {iteration+1}, Train Loss in Stage2: {loss:.7f}")
             
-            if self.args.plot:    
+            if self.args.plot_loss:    
                 self._plot_losses(losses,  'train_stage2')
 
             train_loss = np.average(train_loss)
@@ -383,7 +385,7 @@ class Exp_forecasting(object):
                 break
 
             adjust_learning_rate(optimizer, epoch + 1, self.args)
-            
+        
         training_time = time.time() - t
         print(f"Total training time in stage2: {training_time:.2f}s")
         
@@ -419,19 +421,19 @@ class Exp_forecasting(object):
         return total_loss
 
 
-    def test(self,pretrained_model_path, setting, test):
+    def test(self,model_path, setting, test):
         test_data, test_loader = self._get_data(flag='test')
         if test:
             print('Loading model')
             if self.args.model_used in ['ELFNet','ELFNet_depthwise','ELFNet_no_disentanglement','ELFNet_no_contrastive','ELFNet_no_contrastive','ELFNet_dilution'] :
-                self.model.load_state_dict(torch.load(pretrained_model_path))
+                self.model.load_state_dict(torch.load(model_path))
             else:
-                self.CompareModel.load_state_dict(torch.load(pretrained_model_path))
+                self.CompareModel.load_state_dict(torch.load(model_path))
         preds, trues = [], []
         
         # derive folder_path from provided model_path (use model file name as prefix + "_test_results")
-        model_dir = os.path.dirname(os.path.abspath(pretrained_model_path))
-        model_name = os.path.splitext(os.path.basename(pretrained_model_path))[0]
+        model_dir = os.path.dirname(os.path.abspath(model_path))
+        model_name = os.path.splitext(os.path.basename(model_path))[0]
         folder_path = os.path.join(model_dir, f"{model_name}_test_results")
         
         if not os.path.exists(folder_path):
@@ -500,7 +502,7 @@ class Exp_forecasting(object):
         plt.ylabel('Loss')
         plt.title(f'{phase.capitalize()} Loss')
         plt.legend()
-        plt.savefig(os.path.join(self.plot_dir, f'losses.png'))
+        plt.savefig(os.path.join(self.plot_dir, f'{phase}_losses.png'))
         plt.close()
 
     def _get_groups(self, data_set, target_idx):
