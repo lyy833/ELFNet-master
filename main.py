@@ -5,7 +5,7 @@ import os
 
 def main(args):
 
-    if args.pretrained_model_path is not None:   # model_path: 已保存预训练模型第二阶段的微调继续训练
+    if args.pretrained_model_path is not None:   # pretrained_model_path: 已保存预训练模型第二阶段的微调继续训练
       p = os.path.normpath(args.pretrained_model_path)
       parts = p.split(os.sep)
       if 'test_results' in parts:
@@ -16,23 +16,20 @@ def main(args):
           # 未包含 test_results，取倒数第二个路径段（若不存在则取最后一段）
           setting = parts[-2] if len(parts) >= 2 else parts[-1]
     else:
-      setting = f"{os.path.splitext(args.data_path.split('/')[-1])[0]}_seq_{args.seq_len}_pred_{args.pred_len}_stride_{args.stride}_cluster_{args.numClusters}_{args.anchor}"
+      setting = f"{os.path.splitext(args.pretrain_data_path.split('/')[-1])[0]}_seq_{args.seq_len}_pred_{args.pred_len}_stride_{args.stride}_cluster_{args.numClusters}"
     
-    # 设置单次实验结果保存根路径并创建相应的文件夹，以setting作为区分
+    # 设置单次实验结果保存的test_results下一级路径，并创建相应的文件夹，以setting作为区分
     folder_path = './test_results/' + setting + '/'
     if not os.path.exists(folder_path):
       os.makedirs(folder_path)
     # 设置可视化结果保存路径并创建相应的文件夹（数据增强可视化以及loss曲线可视化）
-    
     if args.plot_augment or args.plot_loss:
-      if args.pretrain_mode == 'one2many':
-        plot_dir = os.path.join(folder_path, f"{os.path.splitext(args.pretrain_data_path.split('/')[-1])[0]}_plot")
-      else:
-        plot_dir = os.path.join(folder_path, f"{os.path.splitext(args.data_path.split('/')[-1])[0]}_plot")
+      plot_dir = os.path.join(folder_path, "plot")
       if not os.path.exists(plot_dir):
         os.makedirs(plot_dir)
     else:
        plot_dir=None
+    
     exp = Exp_forecasting(args,setting,folder_path,plot_dir)
 
     print(f"Training {setting}")
@@ -49,12 +46,12 @@ def main(args):
     file_path = os.path.join(results_folder, 'traning_time.txt') # 构建保存时间的文件路径
     with open(file_path, 'a') as file: # 以追加模式打开文件并写入训练时间
         if args.model_used in ['ELFNet','ELFNet_depthwise', 'ELFNet_no_disentanglement', 'ELFNet_no_contrastive', 'ELFNet_dilution']:
-          file.write(f"{args.model_used}_{setting}: {training_time_stage1:.2f}, {training_time_stage2:.2f}, {total_training_time:.2f}\n")
+          file.write(f"{args.model_used}_{setting}_{os.path.splitext(args.data_path.split('/')[-1])[0]}: {training_time_stage1:.2f}, {training_time_stage2:.2f}, {total_training_time:.2f}\n")
         else:
           file.write(f"{args.model_used}_{setting}: {total_training_time:.2f}\n")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Run time series prediction experiments with causal discovery')
+    parser = argparse.ArgumentParser(description='Run load forecasting experiments based on time series')
     
     # 数据集设置
     ## 预训练模式选择
@@ -66,13 +63,13 @@ if __name__ == "__main__":
     ### datasets/Mathematical_Modeling_Competition.csv
     ### datasets/Australia_Load&Price.csv
     ### datasets/XJ_Photovoltaic.csv
-    #parser.add_argument('--data_path', type=str, default='datasets_copy/Australia_Load&Price.csv', help='single 模式下的唯一数据集路径')
-    parser.add_argument('--data_path', type=str, default='datasets/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径')
+    parser.add_argument('--data_path', type=str, default='datasets/XJ_Photovoltaic.csv', help='single 模式下的唯一数据集路径或者one2many模式下的微调数据集路径')
+    #parser.add_argument('--data_path', type=str, default='datasets/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径或者one2many模式下的微调数据集路径')
     parser.add_argument('--root_path', type=str,default='./', help='Root path to the dataset')
 
     # 数据预处理相关
-    parser.add_argument('--pretrain_freq', type=str, default='t',choices=['t','h','d'], help='Frequency for time features of the pretrain dataset(可选：[分钟t,小时h,天d])')
-    parser.add_argument('--finetune_freq', type=str, default='d',choices=['t','h','d'], help='Frequency for time features of the finetune dataset(可选：[分钟t,小时h,天d])')
+    parser.add_argument('--pretrain_freq', type=str, default='T',choices=['T','H','D'], help='Frequency for time features of the pretrain dataset(可选：[分钟t,小时h,天d])')
+    parser.add_argument('--finetune_freq', type=str, default='T',choices=['T','H','D'], help='Frequency for time features of the finetune dataset(可选：[分钟t,小时h,天d])')
     parser.add_argument('--scale', type=str, default='True', help='Whether to perform data standardization')
     parser.add_argument('--num_augment', type=int, default=4, help='The number of augmented data samples')
     parser.add_argument('--cluster', type=str, default='False', help='Whether to use clustering to decrease samples')
@@ -81,7 +78,7 @@ if __name__ == "__main__":
     
     # basic config
     parser.add_argument('--alpha', type=float, default=0.5, help='Weighting hyperparameter for loss function')
-    parser.add_argument('--plot_augment', type=bool, default=False,help='Whether to plot ')
+    parser.add_argument('--plot_augment', type=bool, default=True,help='Whether to plot ')
     parser.add_argument('--plot_loss', type=bool, default=True,help='Whether to plot ')
     parser.add_argument('--model_used', type=str, default='ELFNet', help='Model to use (e.g., TimesNet)') 
     parser.add_argument('--log_interval',type = int, default=5, help='Log interval for training')
@@ -96,7 +93,7 @@ if __name__ == "__main__":
     # train settiings and optimization
     parser.add_argument('--temperature', type=float, default=0.7, help='temperature scaling factor')
     parser.add_argument('--optimizername', type=str, default='Adam', help='The type of optimizer')
-    parser.add_argument('--train_epochs1', type=int, default=1, help='Number of epochs for pretrain ELFNet using contrasitive learning')
+    parser.add_argument('--train_epochs1', type=int, default=5, help='Number of epochs for pretrain ELFNet using contrasitive learning')
     parser.add_argument('--train_epochs2', type=int, default=50, help='Number of epochs for pretrain ELFNet using supervised learning')
     parser.add_argument('--epochs', type=int, default=4, help='Number of total epochs for training compare model')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
@@ -106,7 +103,7 @@ if __name__ == "__main__":
     parser.add_argument('--improved_delta', type=float, default=0.05, help='Minimum improvement threshold in early stopping mechanism')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate, options: [type1, type2, cosine]')
-    #parser.add_argument('--pretrained_model_path', type=str, default='./test_results/Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None/pretrained_ELFNet_family/ELFNet_Mathematical_Modeling_Competition.pth', help='Saved pretrained model path for further finetune')
+    #parser.add_argument('--pretrained_model_path', type=str, default='test_results/XJ_Photovoltaic_seq_96_pred_48_stride_1_cluster_None/pretrained_ELFNet_family/ELFNet.pth', help='Saved pretrained model path for further finetune')
     parser.add_argument('--pretrained_model_path', type=str, default=None, help='Saved pretrained model path for further finetune')
     parser.add_argument('--freeze_start_layer', type=int, default=2,help='The starting index of the deep layer in the feature extractor during the fine-tuning stage')
 

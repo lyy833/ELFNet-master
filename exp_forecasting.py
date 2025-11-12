@@ -56,7 +56,7 @@ class Exp_forecasting(object):
         print(f"微调数据集变量分组(下标): {self.finetune_groups}")
 
     def _init_models(self):
-        """Initialize models based on model used"""
+        """Initialize models based on model used"""   
         if self.args.model_used in ['ELFNet', 'ELFNet_depthwise', 'ELFNet_no_disentanglement', 'ELFNet_no_contrastive', 'ELFNet_dilution']:
             self._init_ELFNet_family()
         else:
@@ -137,11 +137,10 @@ class Exp_forecasting(object):
         optimizer = self.optimizer
         early_stopping = self.early_stopping
         
-        model_path = os.path.join(self.folder_path, 'baseline_model')
+        model_path = os.path.join(self.folder_path, 'trained_compare_model')
         if not os.path.exists(model_path):
-            os.makedirs(model_path)
-        model_name = f"{self.args.model_used}_{os.path.splitext(self.args.data_path.split('/')[-1])[0]}"
-        pretrained_model_path = os.path.join(model_path,f"{model_name}.pth")
+                os.makedirs(model_path)
+        trained_model_path = os.path.join(model_path,f"{self.args.model_used}.pth")
         
         t = time.time()
         print('=============Starting to train model_used Model==============')
@@ -185,7 +184,7 @@ class Exp_forecasting(object):
                     # 计算最近100个iteration的平均损失
                     recent_avg_loss = np.mean(train_loss[-100:]) if len(train_loss) >= 100 else np.mean(train_loss)
                     # iteration级别早停判断
-                    early_stopping(recent_avg_loss, self.CompareModel, model_path, model_name,is_iteration=True, current_iteration=global_iteration)
+                    early_stopping(recent_avg_loss, self.CompareModel, trained_model_path,is_iteration=True, current_iteration=global_iteration)
                     if early_stopping.is_loss_stable(threshold=0.001): # 额外检查损失是否稳定
                         print(f"损失已趋于稳定，考虑早停")
                         early_stopping.early_stop = True
@@ -205,10 +204,10 @@ class Exp_forecasting(object):
             
             print(f"Training Time  until now: {time.time() - t:.2f}s")
 
-            early_stopping(vali_loss, self.CompareModel, model_path,model_name,is_iteration=False,current_iteration=global_iteration)
+            early_stopping(vali_loss, self.CompareModel, trained_model_path,is_iteration=False,current_iteration=global_iteration)
             
             if self.args.plot_loss: # 可视化训练损失
-                self._plot_losses(losses, 'compare_train')
+                self._plot_losses(losses, f"{self.args.model_used}_compare")
             
             if early_stopping.early_stop :
                 break
@@ -218,7 +217,7 @@ class Exp_forecasting(object):
         total_training_time = time.time() - t
         print(f"Total Training Time: {total_training_time:.2f}s, 总迭代次数: {global_iteration}")
 
-        return total_training_time,pretrained_model_path
+        return total_training_time,trained_model_path
     
 
     def _train_ELFNet_family(self):  
@@ -239,9 +238,11 @@ class Exp_forecasting(object):
         optimizer = self.optimizer
         early_stopping = self.early_stopping
         model_path = os.path.join(self.folder_path, 'pretrained_ELFNet_family')
-        model_name = f"{self.args.model_used}_{os.path.splitext(self.args.data_path.split('/')[-1])[0]}"
-        if self.args.pretrained_model_path == None:
-            self.args.pretrained_model_path = os.path.join(model_path,f"{model_name}.pth")
+        if not os.path.exists(model_path):
+                os.makedirs(model_path)
+        pretrained_model_path = os.path.join(model_path,f"{self.args.model_used}.pth")
+        if self.args.pretrained_model_path == None: # 用于第二阶段训练加载这个模型
+            self.args.pretrained_model_path = pretrained_model_path
         # 初始化输入投影层
         self.model._init_input_projections(self.pretrain_data.data_x.shape[1], self.args.hidden_dims)
 
@@ -271,7 +272,7 @@ class Exp_forecasting(object):
                     # 计算最近100个iteration的平均损失
                     recent_avg_loss = np.mean(train_loss[-100:]) if len(train_loss) >= 100 else np.mean(train_loss)
                     # iteration级别早停判断
-                    early_stopping(recent_avg_loss, self.model, model_path,model_name, is_iteration=True, current_iteration=global_iteration)
+                    early_stopping(recent_avg_loss, self.model, pretrained_model_path, is_iteration=True, current_iteration=global_iteration)
                     if early_stopping.is_loss_stable(threshold=0.001): # 额外检查损失是否稳定
                         print(f"损失已趋于稳定，考虑早停")
                         early_stopping.early_stop = True
@@ -286,14 +287,14 @@ class Exp_forecasting(object):
             print(f"Epoch: {epoch+1}, Train Loss in stage1: {train_loss:.7f}")
 
             if self.args.plot_loss:
-                self._plot_losses(losses, 'train_stage1')
+                self._plot_losses(losses, "stage1")
             
             print(f"Training time in stage1 until now: {time.time() - t:.2f}s")
            
             if early_stopping.early_stop : 
                 break
 
-            early_stopping(train_loss, self.model, model_path,model_name,is_iteration=False,current_iteration=global_iteration)
+            early_stopping(train_loss, self.model, pretrained_model_path,is_iteration=False,current_iteration=global_iteration)
             if early_stopping.early_stop:
                 print("epoch级别训练早停")
                 break
@@ -308,16 +309,15 @@ class Exp_forecasting(object):
     def train_stage2(self):
         epochs = self.args.train_epochs2
         optimizer = self.optimizer
-        model_path = os.path.join(self.folder_path, 'finetuned_ELFNet_family')
-        model_name = f"{self.args.model_used}_{os.path.splitext(self.args.data_path.split('/')[-1])[0]}"
-        finetuned_model_path = os.path.join(model_path,f"{model_name}.pth")
-
+        model_path = os.path.join(self.folder_path, f"finetuned_ELFNet_family/{self.args.model_used}")
+        finetuned_model_path = os.path.join(model_path,f"{os.path.splitext(self.args.data_path.split('/')[-1])[0]}.pth")
+        if not os.path.exists(model_path):
+                os.makedirs(model_path)
         self.early_stopping = IterationEarlyStopping(patience_epochs=self.args.patience_epochs,patience_iterations=self.args.patience_iterations,min_iterations=self.args.min_iterations,verbose=True,delta=self.args.improved_delta)
         early_stopping = self.early_stopping
 
-        # 只有跨数据集情形重新初始化投影层
-        if self.args.pretrain_mode == 'one2many':
-            self.model._init_input_projections(self.finetune_data.data_x.shape[1],self.args.hidden_dims)
+        
+        self.model._init_input_projections(self.finetune_data.data_x.shape[1],self.args.hidden_dims)
         
         t = time.time()
         
@@ -358,7 +358,7 @@ class Exp_forecasting(object):
                     # 计算最近100个iteration的平均损失
                     recent_avg_loss = np.mean(train_loss[-100:]) if len(train_loss) >= 100 else np.mean(train_loss)
                     # iteration级别早停判断
-                    early_stopping(recent_avg_loss, self.model,model_path,model_name, is_iteration=True, current_iteration=global_iteration)
+                    early_stopping(recent_avg_loss, self.model,finetuned_model_path, is_iteration=True, current_iteration=global_iteration)
                     if early_stopping.is_loss_stable(threshold=0.001): # 额外检查损失是否稳定
                         print(f"损失已趋于稳定，考虑早停")
                         early_stopping.early_stop = True
@@ -370,7 +370,7 @@ class Exp_forecasting(object):
                     print(f"Iter: {iteration+1}, Train Loss in Stage2: {loss:.7f}")
             
             if self.args.plot_loss:    
-                self._plot_losses(losses,  'train_stage2')
+                self._plot_losses(losses,  f"{os.path.splitext(self.args.data_path.split('/')[-1])[0]}_stage2")
 
             train_loss = np.average(train_loss)
             print(f"Epoch: {epoch+1}, Train Loss in Stage2: {train_loss:.7f}")
@@ -380,7 +380,7 @@ class Exp_forecasting(object):
             print(f"Vali Loss: {vali_loss:.7f}")
             print(f"Training Time in Stage2 until now: {time.time() - t:.2f}s")
             
-            early_stopping(vali_loss, self.model, model_path,model_name,is_iteration=False,current_iteration=global_iteration)
+            early_stopping(vali_loss, self.model, finetuned_model_path,is_iteration=False,current_iteration=global_iteration)
             if early_stopping.early_stop :
                 break
 
@@ -433,8 +433,7 @@ class Exp_forecasting(object):
         
         # derive folder_path from provided model_path (use model file name as prefix + "_test_results")
         model_dir = os.path.dirname(os.path.abspath(model_path))
-        model_name = os.path.splitext(os.path.basename(model_path))[0]
-        folder_path = os.path.join(model_dir, f"{model_name}_test_results")
+        folder_path = os.path.join(model_dir, f"{os.path.splitext(self.args.data_path.split('/')[-1])[0]}_test_visual")
         
         if not os.path.exists(folder_path):
             os.makedirs(folder_path, exist_ok=True)

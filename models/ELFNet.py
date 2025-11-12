@@ -1,18 +1,151 @@
 import torch 
 from torch import nn
 import torch.nn.functional as F
-from layers.dilated_conv import DilatedConvEncoder,ConvBlock
+from layers.dilated_conv import ConvBlock
 import torch.fft as fft
 import math
 from utils.augmentation import augment
-import numpy as np
 import warnings
 
 warnings.filterwarnings('ignore')
+class MultiScaleContextExtractor(nn.Module):
+    """
+    多尺度上下文提取器,使用卷积处理多通道,用于双向调制机制
+    """
+    def __init__(self, feature_dim, num_scales=3):
+        super().__init__()
+        self.feature_dim = feature_dim
+        
+        # 多尺度池化
+        self.pool_layers = nn.ModuleList([
+            nn.AdaptiveAvgPool1d(1),  # 全局 -> [B, C, 1]
+            nn.AdaptiveAvgPool1d(2),  # 中等 -> [B, C, 2] 
+            nn.AdaptiveAvgPool1d(4)   # 细粒度 -> [B, C, 4]
+        ])
+        
+        # 使用1D卷积处理每个尺度的特征，保持通道维度
+        self.scale_convs = nn.ModuleList([
+            nn.Conv1d(feature_dim, feature_dim, kernel_size=1),  # 全局: [B, C, 1] -> [B, C, 1]
+            nn.Conv1d(feature_dim, feature_dim, kernel_size=2),  # 中等: [B, C, 2] -> [B, C, 1]
+            nn.Conv1d(feature_dim, feature_dim, kernel_size=4)   # 细粒度: [B, C, 4] -> [B, C, 1]
+        ])
+        
+        # 尺度注意力权重
+        self.scale_attention = nn.Sequential(
+            nn.Linear(feature_dim * num_scales, feature_dim),
+            nn.ReLU(),
+            nn.Linear(feature_dim, num_scales),
+            nn.Softmax(dim=-1)
+        )
+
+    def forward(self, x):
+        """
+        x: [B, T, C] 输入特征
+        返回: [B, C] 多尺度融合的上下文向量
+        """
+        B, T, C = x.shape
+        x_transposed = x.transpose(1, 2)  # [B, C, T]
+        
+        scale_features = []
+        for pool, conv in zip(self.pool_layers, self.scale_convs):
+            if T >= pool.output_size:
+                # 池化
+                pooled = pool(x_transposed)  # [B, C, L]
+                
+                # 使用卷积处理（不需要转置）
+                # 对于 kernel_size > pooled_length 的情况，使用适当的填充
+                L = pooled.size(2)
+                if conv.kernel_size[0] > L:
+                    # 如果卷积核大于序列长度，使用较小的核
+                    temp_conv = nn.Conv1d(C, C, kernel_size=L, padding=0).to(x.device)
+                    projected = temp_conv(pooled)  # [B, C, 1]
+                else:
+                    projected = conv(pooled)  # [B, C, 1]
+                
+                scale_features.append(projected.squeeze(-1))  # [B, C]
+            else:
+                # 如果序列长度不够，使用零填充
+                scale_features.append(torch.zeros(B, C, device=x.device))
+        
+        # 拼接多尺度特征 [B, C×3]
+        concatenated = torch.cat(scale_features, dim=-1)  # [B, 3×C]
+        
+        # 计算尺度权重
+        scale_weights = self.scale_attention(concatenated)  # [B, 3]
+        
+        # 加权融合
+        weighted_sum = torch.zeros(B, C, device=x.device)
+        for i, feat in enumerate(scale_features):
+            weight = scale_weights[:, i].unsqueeze(-1)  # [B, 1]
+            weighted_sum += weight * feat
+        
+        return weighted_sum  # [B, C]
+
+class CoupledGatingUnit(nn.Module):
+    """
+    基于耦合门控单元的季节-趋势性表示双向调制器。
+    """
+    def __init__(self, feature_dim, hidden_dim=64):
+        super().__init__()
+        self.feature_dim = feature_dim
+        
+        # 多尺度上下文提取
+        self.context_extractor = MultiScaleContextExtractor(feature_dim)
+        
+        # 趋势→季节的缩放门控
+        self.trend_to_season_scale = nn.Sequential(
+            nn.Linear(feature_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, feature_dim),
+            nn.Tanh()
+        )
+        
+        # 季节→趋势的偏移门控  
+        self.season_to_trend_shift = nn.Sequential(
+            nn.Linear(feature_dim, hidden_dim),
+            nn.ReLU(), 
+            nn.Linear(hidden_dim, feature_dim),
+            nn.Tanh()
+        )
+        
+        # 可学习的调制强度
+        self.scale_factor = nn.Parameter(torch.tensor(0.1))
+        self.shift_factor = nn.Parameter(torch.tensor(0.1))
+
+    def forward(self, trend, season):
+        """
+        改进的双向调制 - 考虑LayerNorm时机
+        """
+        B, T, C = trend.shape
+        
+        # 使用多尺度上下文提取
+        trend_context = self.context_extractor(trend)  # [B, C]
+        season_context = self.context_extractor(season)  # [B, C]
+        
+        # 趋势→季节：缩放调制
+        g_trend_to_season = self.trend_to_season_scale(trend_context)  # [B, C]
+        g_trend_to_season = g_trend_to_season.unsqueeze(1) * self.scale_factor  # [B, 1, C]
+        
+        # 季节→趋势：偏移调制  
+        g_season_to_trend = self.season_to_trend_shift(season_context)  # [B, C]
+        g_season_to_trend = g_season_to_trend.unsqueeze(1) * self.shift_factor  # [B, 1, C]
+        
+        # 应用调制
+        modulated_season = season + g_trend_to_season * season
+        modulated_trend = trend + g_season_to_trend
+        
+        # 关键：调制后立即应用LayerNorm保持量级稳定
+        modulated_season = F.layer_norm(modulated_season, (C,))
+        modulated_trend = F.layer_norm(modulated_trend, (C,))
+        
+        return modulated_trend, modulated_season
 
 
 
 class MixedChannelConvEncoder(nn.Module):
+    """
+    Feature Extractor 实现。
+    """
     def __init__(self,hidden_dims, repr_dims, kernel_size, groups, depth,device):
         super().__init__()
 
@@ -74,6 +207,9 @@ class MixedChannelConvEncoder(nn.Module):
 
 
 class TrendRepresentationDisentangler(nn.Module):
+    """
+    TRD的实现。
+    """
     def __init__(self, args):
         super(TrendRepresentationDisentangler, self).__init__()
         self.conv_layers = nn.ModuleList()
@@ -101,8 +237,12 @@ class TrendRepresentationDisentangler(nn.Module):
 
         return trend
 
-### SRD的实现
+
+
 class BandedFourierLayer(nn.Module):
+    """
+    SRD实现的核心组件。
+    """
     def __init__(self, in_channels, out_channels, band, num_bands, length=201):
         super().__init__()
 
@@ -151,6 +291,9 @@ class BandedFourierLayer(nn.Module):
         nn.init.uniform_(self.bias, -bound, bound)
 
 class MultiBandSeasonalDisentangler(nn.Module):
+    """
+    SRD的实现。
+    """
     def __init__(self, in_channels, out_channels, num_bands=3, length=201):
         super().__init__()
         self.length = length
@@ -236,21 +379,20 @@ class ELFNet(nn.Module):
         # 动态初始化的输入投影层列表
         self.input_projection_list = None
 
-        ### 变量分组混合通道
+        # 特征提取器
         self.feature_extractor = None # 变量分组可能发生变化，前向传播中在具体确定
         
-        ### Trend Representation Disentangler使用num(kernels这个list中元素个数)个核大小为对应kernel的1D因果卷积层（没有先后顺序）构成，给定的的填充大小是kernel-1
+        # Trend Representation Disentangler使用num(kernels这个list中元素个数)个核大小为对应kernel的1D因果卷积层（没有先后顺序）构成，给定的的填充大小是kernel-1
         self.trd = TrendRepresentationDisentangler(args)
 
-
-        # create the encoders
+        # projection head
         self.head = nn.Sequential(
             nn.Linear(args.repr_dims // 2, args.repr_dims // 2),
             nn.ReLU(),
             nn.Linear(args.repr_dims // 2, args.repr_dims // 2)
         )
 
-        ### seasonal representation Disentangler使用多频带傅里叶层网络结构
+        # seasonal representation Disentangler使用多频带傅里叶层网络结构
         self.srd = MultiBandSeasonalDisentangler(
             in_channels=args.repr_dims,
             out_channels=args.repr_dims // 2,
@@ -263,6 +405,8 @@ class ELFNet(nn.Module):
         self.trend_norm = nn.LayerNorm(args.repr_dims // 2)
         self.season_norm = nn.LayerNorm(args.repr_dims // 2)
 
+        # 耦合门控单元
+        self.cgu = CoupledGatingUnit(args.repr_dims // 2)
 
         self.feature_reducer= FeatureReducer(args,args.hidden_dims)#将解耦表示的维度从repr_dims  映射回到 hidden_dims
         
@@ -277,7 +421,7 @@ class ELFNet(nn.Module):
     def _move_to_cuda(self):
         """将组件移动到CUDA设备"""
         components = [
-            self.feature_extractor, self.tfd, self.head, self.sfd,
+            self.feature_extractor, self.trd, self.head, self.srd,
             self.feature_reducer, self.projection, self.pool
         ]
         for component in components:
@@ -293,9 +437,9 @@ class ELFNet(nn.Module):
         print(f"动态初始化输入投影层: {num_vars} 个变量 -> 隐藏维度 {hidden_dim}")
   
     def _freeze_pretrained_components(self, transferred_layers=None):
-        """智能冻结策略 - 只冻结迁移过来的层"""
+        """智能冻结策略"""
         # 总是冻结这些组件
-        always_freeze = [self.tfd, self.head, self.sfd]
+        always_freeze = [self.trd, self.head, self.srd]
         for component in always_freeze:
             for param in component.parameters():
                 param.requires_grad = False
@@ -483,7 +627,6 @@ class ELFNet(nn.Module):
         x_projected = torch.cat(projected_vars, dim=-1)
         y = self.feature_extractor(x_projected) # [batch, repr_dims,seq_len]
     
-        #总的来说，下面代码片段的目标是捕获输入数据x在不同时间尺度上的趋势，并计算这些趋势的平均值。使用多尺度的方法是时间序列分析中的一种常见技巧，因为它允许模型在不同的时间尺度上捕获模式和依赖性。
         #提去趋势性成分特征
         trend = []
         for idx, mod in enumerate(self.trd.conv_layers):
@@ -493,12 +636,17 @@ class ELFNet(nn.Module):
             trend.append(out.transpose(1, 2))
         trend = torch.mean(torch.stack(trend), dim=0)
         trend = self.trend_norm(trend)  # 归一化
-        trend = self.repr_dropout(trend)  # 新增：趋势特征也应用dropout
         
-        ### 提取季节性成分的特征
+        # 提取季节性成分的特征
         season = self.srd(y.transpose(1, 2)) # [B, T, repr_dims//2]
         season = self.season_norm(season)  # 归一化
-        season = self.repr_dropout(season)
+        
+        # 使用CGU进行双向调制
+        trend_modulated, season_modulated = self.cgu(trend, season)
+
+        # 趋势/季节特征均应用dropout
+        trend = self.repr_dropout(trend_modulated)  
+        season = self.repr_dropout(season_modulated)
 
         if not self.stage2:
             return trend, season

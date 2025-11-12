@@ -22,7 +22,16 @@ ELFNet/
 ├── models/                  # 其他模型定义
 ├── utils/                   # 工具函数
 ├── main.py                  # 主程序入口
+├── test_results/            # 结果保存文件夹  
 ```
+其中 `test_results` 文件夹说明如下：
+1. **一级文件夹**：以实验 setting 命名，例如 `Australia_Load&Price_seq_96_pred_48_stride_1_cluster_None_None`,里面包含的数据集名称是预训练数据集名称。
+2. **二级文件夹**包括：
+ - `plot` ：**可示化结果文件夹**，其下包含预训练数据集的增强可视化结果以及第一阶段和第二阶段的训练损失可视化，第一阶段的损失由于只涉及当前预训练数据集，直接命名为 `stage1_loss.png`;第二阶段的训练损失需要根据微调数据集设置名称，比如 `Mathematical_Modeling_Competition_stage2_loss.png`
+ - `pretrained_ELFNet_family`：保存 `ELFNet` 及其消融模型预训练模型权重 `.pth`文件，比如 `ELFNet.pth`、`ELFNet_no_disentanglement.pth`等
+ - `trained_compare_model`：baseline 模型训练权重 `.pth`文件保存路径，比如 `ELFNet.pth`、`ELFNet_no_disentanglement.pth`等
+ - `finetuned_ELFNet_family`：其下又包含若干个**三级文件夹**，分别为 `ELFNet`,`ELFNet_depthwise`, `ELFNet_no_disentanglement`, `ELFNet_no_contrastive`, `ELFNet_dilution`，每个三级文件夹下面的微调模型以微调数据集命名,同时保存该微调模型的测试可视化结果。
+
 
 ## 安装
 

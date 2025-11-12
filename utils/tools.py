@@ -7,6 +7,58 @@ from utils.augmentation import *
 
 plt.switch_backend('agg')
 
+def validate_window_config(data_freq, seq_len, pred_len):
+    """验证窗口配置的合理性 - 支持30分钟粒度"""
+    
+    # 频率到分钟数的映射
+    freq_to_minutes = {
+        't': 15,    # 15分钟
+        't30': 30,  # 30分钟
+        'h': 60,    # 1小时  
+        'd': 1440   # 1天
+    }
+    
+    if data_freq not in freq_to_minutes:
+        print(f"⚠️ 未知频率: {data_freq}, 请使用 {list(freq_to_minutes.keys())}")
+        return
+    
+    minutes_per_point = freq_to_minutes[data_freq]
+    
+    # 计算物理时间跨度
+    input_minutes = seq_len * minutes_per_point
+    pred_minutes = pred_len * minutes_per_point
+    
+    input_hours = input_minutes / 60
+    pred_hours = pred_minutes / 60
+    
+    input_days = input_hours / 24
+    pred_days = pred_hours / 24
+    
+    print(f"数据粒度: {data_freq} ({minutes_per_point}分钟/点)")
+    print(f"输入跨度: {input_minutes}分钟 = {input_hours:.1f}小时 = {input_days:.1f}天")
+    print(f"预测跨度: {pred_minutes}分钟 = {pred_hours:.1f}小时 = {pred_days:.1f}天")
+    
+    # 检查是否覆盖关键周期
+    print("\n周期性覆盖检查:")
+    if input_hours >= 24:
+        print("✓ 覆盖日周期")
+    if input_hours >= 168:  
+        print("✓ 覆盖周周期")
+    if input_days >= 30:
+        print("✓ 覆盖月周期")
+    
+    # 针对30分钟的特殊建议
+    if data_freq == 't30':
+        print("\n🔍 30分钟粒度特殊建议:")
+        if seq_len % 48 == 0:
+            print("✓ 输入长度是48的倍数，能完整对齐日周期")
+        else:
+            print("⚠️ 建议调整输入长度为48的倍数以更好对齐日周期")
+            
+        if pred_len % 48 == 0:
+            print("✓ 预测长度是48的倍数，能完整对齐日周期")
+        else:
+            print("⚠️ 建议调整预测长度为48的倍数以更好对齐日周期")
 
 def adjust_learning_rate(optimizer, epoch, args):
     """
@@ -83,7 +135,7 @@ class IterationEarlyStopping:
         self.loss_window = []
         self.window_size = 20  # 监控最近20个iteration的损失
 
-    def __call__(self, current_loss, model,  model_path=None , model_name=None, is_iteration=False, current_iteration=0):
+    def __call__(self, current_loss, model,  full_model_path=None , is_iteration=False, current_iteration=0):
         """
         调用早停判断
         
@@ -115,16 +167,16 @@ class IterationEarlyStopping:
         else: # epoch 级早停调用处理
             if self.best_score_epoch is None: # 第一次 epoch级早停调用,一定会保存模型
                 self.best_score_epoch = score
-                if model_path is not None and model_name is not None: # 第一次epoch级别调用时保存模型
-                    self.save_checkpoint(current_loss, model, model_path, model_name)
+                if full_model_path is not None: # 第一次epoch级别调用时保存模型
+                    self.save_checkpoint(current_loss, model, full_model_path)
             else:
                 # epoch级别的改善判断
                 improved = score > self.best_score_epoch # epoch级别是否改善放宽松点，不需要delta偏离值
                 if improved:
                     self.best_score_epoch = score
                     self.counter_epochs = 0
-                    if model_path is not None and model_name is not None:
-                        self.save_checkpoint(current_loss, model, model_path, model_name)
+                    if full_model_path is not None:
+                        self.save_checkpoint(current_loss, model, full_model_path)
                     else:
                         self.counter_epochs += 1
         
@@ -162,13 +214,11 @@ class IterationEarlyStopping:
             return cv < threshold
         return False
 
-    def save_checkpoint(self, val_loss, model, model_path,model_name):
+    def save_checkpoint(self, val_loss, model, full_model_path):
         """保存模型检查点"""
         if self.verbose:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}). Saving model ...')
-            if not os.path.exists(model_path):
-                os.makedirs(model_path)
-            torch.save(model.state_dict(), f"{model_path}/{model_name}.pth")
+            torch.save(model.state_dict(), full_model_path)
         self.val_loss_min = val_loss
 
 class dotdict(dict):
