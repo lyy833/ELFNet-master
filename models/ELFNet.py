@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from layers.dilated_conv import ConvBlock
 import torch.fft as fft
 import math
-from utils.augmentation import augment
+from utils.augmentation import DomainAugmentationFramework
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -412,7 +412,10 @@ class ELFNet(nn.Module):
         
         self.projection = nn.Linear(args.hidden_dims, args.c_out, bias=True)  # 新增的全连接层
         self.pool = nn.AdaptiveAvgPool1d(output_size=args.pred_len )  # 自适应平均池化层
-
+        
+        self.augmentor = DomainAugmentationFramework(args.pretrain_target_idx)
+        
+        
         if device == 'cuda:{}'.format(self.args.gpu):
             self._move_to_cuda()
 
@@ -659,10 +662,11 @@ class ELFNet(nn.Module):
             return output[:, -self.args.pred_len:, :]    
 
     def compute_loss(self, batch_x, batch_y, plot_dir, groups, plot_augment_flag):
-        batch_x, positive_batch_x, negative_batch_x_list = augment(
-            batch_x, batch_y, self.args.num_augment, plot_dir, 
-            self.args.plot_augment, plot_augment_flag
-        )
+        #batch_x, positive_batch_x, negative_batch_x_list = augment(
+        #    batch_x, batch_y, self.args.num_augment, plot_dir, 
+        #    self.args.plot_augment, plot_augment_flag)
+
+        batch_x, positive_batch_x, negative_batch_x_list = self.augmentor.augment_batch(batch_x, batch_y,plot_dir, plot_augment_flag)
         
         batch_x = batch_x.to(torch.float32)
         batch_x = batch_x.transpose(1, 2).to(self.device)

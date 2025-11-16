@@ -1,9 +1,10 @@
-import os
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import math
 from utils.augmentation import *
+
+
 
 plt.switch_backend('agg')
 
@@ -60,6 +61,8 @@ def validate_window_config(data_freq, seq_len, pred_len):
         else:
             print("⚠️ 建议调整预测长度为48的倍数以更好对齐日周期")
 
+
+
 def adjust_learning_rate(optimizer, epoch, args):
     """
     根据不同的策略调整学习率。
@@ -98,6 +101,11 @@ def adjust_learning_rate(optimizer, epoch, args):
         # 打印学习率更新信息
         print('Updating learning rate to {}'.format(lr))
 
+def to_numpy(tensor):
+    """将张量转换为numpy数组"""
+    if isinstance(tensor, torch.Tensor):
+        return tensor.detach().cpu().numpy()
+    return tensor
 
 
 class IterationEarlyStopping:

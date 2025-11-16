@@ -58,12 +58,12 @@ if __name__ == "__main__":
     parser.add_argument('--pretrain_mode', type=str, default='one2many', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
     ## one2many模式下的预训练数据集路径，此模式指 “单数据集预训练+其它数据集独立微调与测试”
     #parser.add_argument('--pretrain_data_path', type=str, default=None,help='预训练数据集路径，用于one2many模式')
-    parser.add_argument('--pretrain_data_path', type=str, default='datasets/Australia_Load&Price.csv',help='预训练数据集路径，用于one2many模式')
+    parser.add_argument('--pretrain_data_path', type=str, default='datasets_copy/Australia_Load&Price.csv',help='预训练数据集路径，用于one2many模式')
     ## data_path : single 模式下的数据集路径
     ### datasets/Mathematical_Modeling_Competition.csv
     ### datasets/Australia_Load&Price.csv
     ### datasets/XJ_Photovoltaic.csv
-    parser.add_argument('--data_path', type=str, default='datasets/XJ_Photovoltaic.csv', help='single 模式下的唯一数据集路径或者one2many模式下的微调数据集路径')
+    parser.add_argument('--data_path', type=str, default='datasets_copy/XJ_Photovoltaic.csv', help='single 模式下的唯一数据集路径或者one2many模式下的微调数据集路径')
     #parser.add_argument('--data_path', type=str, default='datasets/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径或者one2many模式下的微调数据集路径')
     parser.add_argument('--root_path', type=str,default='./', help='Root path to the dataset')
 
@@ -71,7 +71,7 @@ if __name__ == "__main__":
     parser.add_argument('--pretrain_freq', type=str, default='T',choices=['T','H','D'], help='Frequency for time features of the pretrain dataset(可选：[分钟t,小时h,天d])')
     parser.add_argument('--finetune_freq', type=str, default='T',choices=['T','H','D'], help='Frequency for time features of the finetune dataset(可选：[分钟t,小时h,天d])')
     parser.add_argument('--scale', type=str, default='True', help='Whether to perform data standardization')
-    parser.add_argument('--num_augment', type=int, default=4, help='The number of augmented data samples')
+    #parser.add_argument('--num_augment', type=int, default=4, help='The number of augmented data samples')
     parser.add_argument('--cluster', type=str, default='False', help='Whether to use clustering to decrease samples')
     parser.add_argument('--numClusters', type=int, default=None, help='Number of clusters to use for clustering')
     parser.add_argument('--anchor', type=str, default=None, help='Center for clustering, optional choices: [random, center]')
@@ -93,8 +93,8 @@ if __name__ == "__main__":
     # train settiings and optimization
     parser.add_argument('--temperature', type=float, default=0.7, help='temperature scaling factor')
     parser.add_argument('--optimizername', type=str, default='Adam', help='The type of optimizer')
-    parser.add_argument('--train_epochs1', type=int, default=5, help='Number of epochs for pretrain ELFNet using contrasitive learning')
-    parser.add_argument('--train_epochs2', type=int, default=50, help='Number of epochs for pretrain ELFNet using supervised learning')
+    parser.add_argument('--train_epochs1', type=int, default=1, help='Number of epochs for pretrain ELFNet using contrasitive learning')
+    parser.add_argument('--train_epochs2', type=int, default=1, help='Number of epochs for pretrain ELFNet using supervised learning')
     parser.add_argument('--epochs', type=int, default=4, help='Number of total epochs for training compare model')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
     parser.add_argument('--patience_epochs', type=int, default=5, help='early stopping patience - epoch level')
@@ -110,7 +110,7 @@ if __name__ == "__main__":
 
     # GPU
     parser.add_argument('--num_workers', type=int, default=0, help='Number of workers for data loading')
-    parser.add_argument('--use_gpu', type=bool, default=True, help='Whether to use GPU')
+    parser.add_argument('--use_gpu', type=bool, default=False, help='Whether to use GPU')
     parser.add_argument('--gpu', type=int, default=0, help='GPU device id')
     parser.add_argument('--use_multi_gpu', type=bool, default=False, help='Whether to use multiple GPUs')
     parser.add_argument('--devices', type=str, default='0', help='Device ids for multiple GPUs')

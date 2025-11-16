@@ -69,6 +69,7 @@ class Exp_forecasting(object):
             print('Standard VG-HCS ELFNet...')
             if self.args.pretrained_model_path is None:
                 self.model = ELFNet(self.args, device=self.device, stage2=False).to(self.device)
+                self.model.augmentor.initialize_from_data(self.pretrain_data.data_x,self.pretrain_data.data_y)
             else:
                 self.model = ELFNet(self.args, device=self.device, stage2=True).to(self.device)
         
