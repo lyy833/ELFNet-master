@@ -4,202 +4,6 @@ import matplotlib.pyplot as plt
 from sklearn.feature_selection import mutual_info_regression
 import os
 
-
-def jitter(x, sigma=0.03):
-    # https://arxiv.org/pdf/1706.00527.pdf
-    # 抖动：向时间序列数据中添加高斯噪声，以模拟噪声数据。
-    if isinstance(x, torch.Tensor): # 如果输入是 torch.Tensor，则在相同设备和 dtype 上使用 torch.randn_like；
-        noise = torch.randn_like(x) * sigma
-        return x + noise
-    else:  # 否则使用 numpy 生成噪声。
-        return x + np.random.normal(loc=0., scale=sigma, size=x.shape)
-
-def scaling(x, sigma=0.1):
-    # https://arxiv.org/pdf/1706.00527.pdf
-    # 缩放：随机缩放数据，每个特征乘以一个随机因子
-    if isinstance(x, torch.Tensor):
-        # factor shape: (batch, features)
-        factor = torch.normal(mean=1.0, std=sigma, size=(x.shape[0], x.shape[2]), device=x.device, dtype=x.dtype)
-        factor = factor.unsqueeze(1)  # (batch, 1, features)
-        return x * factor
-    else:
-        factor = np.random.normal(loc=1., scale=sigma, size=(x.shape[0], x.shape[2]))
-        return np.multiply(x, factor[:, np.newaxis, :])
-
-def shift(x, sigma=0.1):
-    """
-    平移/微扰：为时间序列添加小的随机偏移（高斯噪声）
-    兼容 torch.Tensor 与 numpy.ndarray
-    """
-    if isinstance(x, torch.Tensor):
-        noise = torch.randn(size=x.shape, device=x.device, dtype=x.dtype) * sigma
-        return x + noise
-    else:
-        return x + np.random.normal(loc=0., scale=sigma, size=x.shape)
-
-def wdba(x, labels, batch_size=6, slope_constraint="symmetric", use_window=True, verbose=0):
-    """
-    基于动态时间规整（DTW）的加权数据库平均（WDBA）算法。
-    兼容 torch.Tensor 与 numpy.ndarray，返回与输入相同的类型与设备。
-    """
-    # detect original type/device/dtype
-    input_is_tensor = isinstance(x, torch.Tensor)
-    x_device = None
-    x_dtype = None
-    if input_is_tensor:
-        x_device = x.device
-        x_dtype = x.dtype
-        x_np = x.detach().cpu().numpy()
-    else:
-        x_np = np.array(x)
-
-    if isinstance(labels, torch.Tensor):
-        labels_np = labels.detach().cpu().numpy()
-    else:
-        labels_np = np.array(labels)
-
-    # https://ieeexplore.ieee.org/document/8215569
-    import utils.dtw as dtw
-
-    if use_window:
-        window = np.ceil(x_np.shape[1] / 10.).astype(int)
-    else:
-        window = None
-
-    orig_steps = np.arange(x_np.shape[1])
-    l = np.argmax(labels_np, axis=1) if labels_np.ndim > 1 else labels_np
-
-    ret = np.zeros_like(x_np)
-    for i in range(ret.shape[0]):
-        choices = np.where(l == l[i])[0]
-        if choices.size > 0:
-            k = min(choices.size, batch_size)
-            random_prototypes = x_np[np.random.choice(choices, k, replace=False)]
-
-            dtw_matrix = np.zeros((k, k))
-            for p, prototype in enumerate(random_prototypes):
-                for s, sample in enumerate(random_prototypes):
-                    if p == s:
-                        dtw_matrix[p, s] = 0.
-                    else:
-                        dtw_matrix[p, s] = dtw.dtw(prototype, sample, dtw.RETURN_VALUE,
-                                                   slope_constraint=slope_constraint, window=window)
-
-            medoid_id = np.argsort(np.sum(dtw_matrix, axis=1))[0]
-            nearest_order = np.argsort(dtw_matrix[medoid_id])
-            medoid_pattern = random_prototypes[medoid_id]
-
-            average_pattern = np.zeros_like(medoid_pattern)
-            weighted_sums = np.zeros((medoid_pattern.shape[0]))
-            for nid in nearest_order:
-                if nid == medoid_id or dtw_matrix[medoid_id, nearest_order[1]] == 0.:
-                    average_pattern += medoid_pattern
-                    weighted_sums += np.ones_like(weighted_sums)
-                else:
-                    path = dtw.dtw(medoid_pattern, random_prototypes[nid], dtw.RETURN_PATH,
-                                   slope_constraint=slope_constraint, window=window)
-                    dtw_value = dtw_matrix[medoid_id, nid]
-                    warped = random_prototypes[nid, path[1]]
-                    weight = np.exp(np.log(0.5) * dtw_value / dtw_matrix[medoid_id, nearest_order[1]])
-                    average_pattern[path[0]] += weight * warped
-                    weighted_sums[path[0]] += weight
-
-            # Avoid division by zero
-            zero_mask = weighted_sums == 0
-            weighted_sums[zero_mask] = 1.0
-            ret[i, :] = average_pattern / weighted_sums[:, np.newaxis]
-        else:
-            ret[i, :] = x_np[i]
-
-    if input_is_tensor:
-        return torch.tensor(ret, dtype=x_dtype, device=x_device)
-    else:
-        return ret
-
-def reverse_order(x):
-    """
-    逆序
-    """
-    if isinstance(x, torch.Tensor):
-        return torch.flip(x, dims=[1])
-    else:
-        return np.flip(x, axis=1)
-
-def detrend(x):
-    from scipy.signal import detrend as scipy_detrend
-    if isinstance(x, torch.Tensor):
-        x_numpy = x.detach().cpu().numpy()
-        detrended = scipy_detrend(x_numpy, axis=1)
-        return torch.tensor(detrended, dtype=x.dtype, device=x.device)
-    else:
-        return scipy_detrend(np.array(x), axis=1)
-
-def cumulative_sum(x):
-    """
-    累积和
-    """
-    if isinstance(x, torch.Tensor):
-        return torch.cumsum(x, dim=1)
-    else:
-        return np.cumsum(x, axis=1)
-
-def polynomial_transform(x, degree=2):
-    """
-    多项式变换
-    """
-    if isinstance(x, torch.Tensor):
-        return torch.pow(x, degree)
-    else:
-        return np.power(x, degree)
-
-def augment(x, y, negative_num, plot_dir,plot_augment, plot_augment_flag):
-    import matplotlib.pyplot as plt
-    import os
-
-    def to_numpy(a):
-        return a.detach().cpu().numpy() if isinstance(a, torch.Tensor) else np.array(a)
-
-    # 正增强
-    x_jitter = jitter(x)
-    x_scaling = scaling(x_jitter)
-    x_wdba = wdba(x_scaling, y)
-    x_shift = shift(x_wdba)
-    x_augment_p = x_shift
-
-    # 负增强
-    x_augment_n_list = []
-    for i in range(negative_num):
-        if i % 4 == 0:
-            x_augment_n = reverse_order(x)
-        elif i % 4 == 1:
-            x_augment_n = detrend(x)
-        elif i % 4 == 2:
-            x_augment_n = cumulative_sum(x)
-        else:
-            x_augment_n = polynomial_transform(x)
-
-        x_augment_n_list.append(x_augment_n)
-
-    # 可视化原始数据和增强数据
-    batch_size, num_features, seq_len = x.shape
-
-    if plot_augment_flag and plot_augment:
-        for i in range(num_features):
-            for j in range(negative_num):
-                plt.figure(figsize=(15, 5))
-                plt.plot(to_numpy(x)[0, i,:], label='Original', linestyle='-', marker='o')
-                plt.plot(to_numpy(x_augment_p)[0, i,:], label='Positive Augment', linestyle='--', marker='x')
-                plt.plot(to_numpy(x_augment_n_list[j])[0, i,:], label='Negative Augment', linestyle=':', marker='s')
-                plt.title(f'Feature {i + 1} Negative Augment {j + 1}')
-                plt.xlabel('Time')
-                plt.ylabel('Value')
-                plt.legend()
-                plt.savefig(os.path.join(plot_dir, f'feature_{i + 1}_negative_{j +1}_comparison.png'))
-                plt.close()
-    return x, x_augment_p, x_augment_n_list
-
-
-
 class VariableImportanceAnalyzer:
     """关键变量自动识别器，用于因果感知增强器(CausalAwareAugmenter)"""
     
@@ -418,22 +222,16 @@ class CausalAwareAugmenter:
         
         # 只对非因果变量进行多样化扰动
         for var_idx in self.non_causal_vars:
-            # 随机选择扰动类型
-            aug_type = np.random.choice(['scale', 'shift', 'noise', 'combination'])
-            
-            if aug_type == 'scale':
-                scale = 0.9 + torch.rand(1).to(x.device) * 0.2
-                x_aug[:, :, var_idx] = x[:, :, var_idx] * scale
-            elif aug_type == 'shift':
-                shift = torch.randn(1).to(x.device) * 0.05
-                x_aug[:, :, var_idx] = x[:, :, var_idx] + shift
-            elif aug_type == 'noise':
-                noise = torch.randn_like(x[:, :, var_idx]) * 0.02
-                x_aug[:, :, var_idx] = x[:, :, var_idx] + noise
-            else:  # combination
-                scale = 0.95 + torch.rand(1).to(x.device) * 0.1
-                noise = torch.randn_like(x[:, :, var_idx]) * 0.01
-                x_aug[:, :, var_idx] = x[:, :, var_idx] * scale + noise
+            # 组合多种轻微扰动
+            ## scale
+            scale = 0.9 + torch.rand(1).to(x.device) * 0.2
+            x_var_scale= x[:,var_idx,:] * scale 
+            ## shift
+            shift = torch.randn(1).to(x.device) * 0.01
+            x_var_shift = x_var_scale + shift
+            ##low_freq_noise
+            x_var_noise = self._add_low_frequency_noise(x_var_shift)       
+            x_aug[:,var_idx,:] = x_var_noise
         
         # 关键：因果变量完全保持不变
         return x_aug
@@ -446,12 +244,11 @@ class CausalAwareAugmenter:
         
         # 策略1: 因果变量置换（最有效的策略）
         neg_samples.append(self._causal_variable_permutation(x))
-        
-        # 策略2: 因果变量独立扰动
-        neg_samples.append(self._causal_variable_corruption(x))
-        
+        # 策略2: 因果变量结构化破坏
+        neg_samples.append(self._causal_variable_structured_corruption(x))
         # 策略3: 因果关系破坏（交换因果变量的时序模式）
         neg_samples.append(self._causal_relationship_disruption(x))
+        
         
         return neg_samples
     
@@ -463,48 +260,98 @@ class CausalAwareAugmenter:
         if batch_size > 1:  # 需要至少2个样本来置换
             perm_indices = torch.randperm(batch_size)
             for var_idx in self.causal_vars:
-                x_neg[:, :, var_idx] = x[perm_indices, :, var_idx]
+                x_neg[:,var_idx,:] = x[perm_indices, var_idx, :]
         
         return x_neg
     
-    def _causal_variable_corruption(self, x):
-        """因果变量独立扰动 - 对每个因果变量独立施加强扰动"""
+    def _add_low_frequency_noise(self, data):
+        """添加"""
+        B, T = data.shape
+        device = data.device
+        
+        # 计算合适的基础噪声强度
+        data_std = data.std(dim=1, keepdim=True)
+        base_strength = data_std * 0.15  # 15%标准差作为基础强度
+        
+        # 生成低频噪声
+        low_freq_noise = torch.zeros(B, T, device=device)
+        
+        for i in range(B):
+            # 生成随机游走噪声
+            white_noise = torch.randn(T, device=device) * base_strength[i] * 0.1
+            random_walk = torch.cumsum(white_noise, dim=0)
+            
+            # 适度平滑
+            kernel_size = max(3, T // 20)
+            weights = torch.ones(kernel_size, device=device) / kernel_size
+            
+            # 使用正确的padding确保输出长度不变
+            padding = (kernel_size - 1) // 2  
+            
+            smoothed = torch.nn.functional.conv1d(
+                random_walk.unsqueeze(0).unsqueeze(0), 
+                weights.unsqueeze(0).unsqueeze(0), 
+                padding=padding
+            ).squeeze()
+            
+            # 确保长度匹配
+            if smoothed.size(0) > T:
+                smoothed = smoothed[:T]
+            elif smoothed.size(0) < T:
+                # 如果长度不足，用零填充
+                pad_size = T - smoothed.size(0)
+                smoothed = torch.nn.functional.pad(smoothed, (0, pad_size))
+            
+            low_freq_noise[i] = smoothed
+        
+        return data + low_freq_noise
+    
+    
+    def _causal_variable_structured_corruption(self, x):
+        """因果变量结构化破坏 - 使用趋势反转和相位偏移替代随机噪声"""
         x_neg = x.clone()
-        B, T, C = x.shape
+        B, C, T = x.shape
         
         for var_idx in self.causal_vars:
-            # 对每个因果变量独立施加扰动
-            aug_type = np.random.choice(['strong_scale', 'strong_shift', 'pattern_noise'])
+            # 随机选择结构化破坏方式
+            corruption_type = np.random.choice(['trend_reverse', 'phase_shift', 'pattern_inversion','time_reverse'])
             
-            if aug_type == 'strong_scale':
-                # 强缩放：0.5-1.5倍
-                scale = 0.5 + torch.rand(B, 1).to(x.device)  # 每个样本不同的缩放
-                x_neg[:, :, var_idx] = x[:, :, var_idx] * scale
-            elif aug_type == 'strong_shift':
-                # 强偏移：±0.3倍标准差
-                var_std = x[:, :, var_idx].std()
-                shift = torch.randn(B, 1).to(x.device) * 0.3 * var_std
-                x_neg[:, :, var_idx] = x[:, :, var_idx] + shift
-            else:  # pattern_noise
-                # 模式噪声：破坏时序模式
-                noise_std = 0.2 * x[:, :, var_idx].std()
-                pattern_noise = torch.randn(B, T).to(x.device) * noise_std
-                x_neg[:, :, var_idx] = x[:, :, var_idx] + pattern_noise
+            if corruption_type == 'trend_reverse':
+                # 趋势反转：对序列进行线性变换使其趋势反转
+                ## 生成一个从-1到1的等差数列，长度为T（时间步长），然后调整形状为(1, T)
+                linear_trend = torch.linspace(-1, 1, T, device=x.device).reshape(1, -1)
+                ## 计算所有样本下标为var_idx的变量的标准差，然后乘以0.1,trend_strength的形状为(B, 1)
+                trend_strength = 0.1 * x[:,var_idx,:].std(dim=1, keepdim=True)
+                ## 这里linear_trend的形状是(1, T)，trend_strength的形状是(B, 1)，两者相乘会广播为(B, T)
+                ## trend[t] * strength 提取了一个线性趋势
+                ## 减去其两倍相当于实现趋势反转
+                x_neg[:,var_idx,:] = x[:,var_idx, :] - 2 * linear_trend * trend_strength
+                
+            elif corruption_type == 'phase_shift':
+                # 相位偏移：将序列在时间轴上平移
+                shift_amount = torch.randint(T//4, T//2, (1,)).item()
+                x_neg[:,var_idx,:] = torch.roll(x_neg[:,var_idx,:], shifts=shift_amount, dims=1)
+            elif corruption_type =='time_reverse' :
+                x_neg[:, var_idx, :] = torch.flip(x[:, var_idx, :], dims=[1])
+            else:  # pattern_inversion
+                # 模式反转：将序列围绕均值翻转
+                series_mean = x[:, var_idx, :].mean(dim=1, keepdim=True)
+                x_neg[:, var_idx, :] = 2 * series_mean - x[:, var_idx, :]
         
         return x_neg
-    
+
     def _causal_relationship_disruption(self, x):
         """因果关系破坏 - 样本内交换因果变量"""
         x_neg = x.clone()
-        B, T, C = x.shape
+        B, C, T = x.shape
         
         if len(self.causal_vars) >= 2:
             # 随机选择两个因果变量交换它们的时序模式
             var1, var2 = np.random.choice(self.causal_vars, 2, replace=False)
             
             # 交换时序模式（保持各自的幅度特性）
-            var1_data = x[:, :, var1].clone()
-            var2_data = x[:, :, var2].clone()
+            var1_data = x[:, var1,:].clone()
+            var2_data = x[:, var2,:].clone()
             
             # 标准化后交换
             var1_mean, var1_std = var1_data.mean(), var1_data.std()
@@ -515,10 +362,12 @@ class CausalAwareAugmenter:
                 var1_normalized = (var1_data - var1_mean) / var1_std
                 var2_normalized = (var2_data - var2_mean) / var2_std
                 
-                x_neg[:, :, var1] = var2_normalized * var1_std + var1_mean
-                x_neg[:, :, var2] = var1_normalized * var2_std + var2_mean
+                x_neg[:, var1,:] = var2_normalized * var1_std + var1_mean
+                x_neg[:, var2,:] = var1_normalized * var2_std + var2_mean
         
         return x_neg
+    
+
 
 
 class DynamicPeakDetectionAugmenter:
@@ -527,10 +376,11 @@ class DynamicPeakDetectionAugmenter:
     使用分位数阈值识别高负荷和低负荷时段,基于电力系统实际的峰谷用电模式进行增强
     """
     def __init__(self, peak_percentile=0.85, off_peak_percentile=0.15, 
-                 min_peak_ratio=1.2, max_augment_strength=0.15):
+                 min_std_ratio=1.0, min_range_ratio=0.3,max_augment_strength=0.15):
         self.peak_percentile = peak_percentile # 波峰分位数
         self.off_peak_percentile = off_peak_percentile # 波谷分位数
-        self.min_peak_ratio = min_peak_ratio  # 峰谷最小比例阈值
+        self.min_std_ratio = min_std_ratio  # 峰谷最小比例阈值
+        self.min_range_ratio = min_range_ratio
         self.max_augment_strength = max_augment_strength # 最大增强强度
     
     def dynamic_peak_augment(self, x, load_var_index):
@@ -540,20 +390,26 @@ class DynamicPeakDetectionAugmenter:
         - 波谷加噪：模拟基础负荷波动、小用户随机行为、测量噪声
         """
         x_aug = x.clone()
-        B, T, C = x.shape
+        B, C, T = x.shape
         
-        load_data = x[:, :, load_var_index]  # [B, T]
+        load_data = x[:, load_var_index,:]  # [B, T]
         
         for i in range(B): # 依次处理每个样本
-            sample_load = load_data[i] # [1,T]
+            sample_load = load_data[i] # [T]
             
             # 计算峰谷阈值
             peak_threshold = torch.quantile(sample_load, self.peak_percentile) # 默认sample_load升序排列后T*85%位置对应元素的值
             off_peak_threshold = torch.quantile(sample_load, self.off_peak_percentile) # # 默认sample_load升序排列后T*15%位置对应元素的值
             
-            # 峰谷差异显著性检查，避免对无明显峰谷模式的序列进行无效增强
-            peak_valley_ratio = peak_threshold / (off_peak_threshold + 1e-6) 
-            if peak_valley_ratio < self.min_peak_ratio: # 峰谷差异不明显，跳过增强
+            # 峰谷差异显著性检查,结合多种指标进行检查
+            data_std = sample_load.std()
+            data_range = sample_load.max() - sample_load.min()
+            peak_valley_gap = peak_threshold - off_peak_threshold
+            ## 使用标准差和范围的综合指标
+            std_ratio = peak_valley_gap / (data_std + 1e-6)
+            range_ratio = peak_valley_gap / (data_range + 1e-6)
+            ## 任一指标满足即可
+            if std_ratio < self.min_std_ratio and range_ratio < self.min_range_ratio:
                 continue
             
             peak_mask = sample_load > peak_threshold
@@ -563,13 +419,16 @@ class DynamicPeakDetectionAugmenter:
             if peak_mask.any():
                 # max_augment_strength用于最大增强强度限制，防止过度增强导致数据失真
                 peak_scale = 1.0 - torch.rand(1).to(x.device) * self.max_augment_strength
-                x_aug[i, peak_mask, :] = x_aug[i, peak_mask, :] * peak_scale
+                x_aug[i,: ,peak_mask] = x_aug[i,:,peak_mask] * peak_scale
             
             # 谷时段增强
             if off_peak_mask.any():
-                noise_std = torch.rand(1).to(x.device) * self.max_augment_strength * 0.1
-                noise = torch.randn_like(x_aug[i, off_peak_mask, :]) * noise_std
-                x_aug[i, off_peak_mask, :] = x_aug[i, off_peak_mask, :] + noise
+                # 基于谷时段数据的标准差设置噪声强度
+                off_peak_data = x_aug[i, :, off_peak_mask]
+                data_std = off_peak_data.std()
+                noise_std = torch.rand(1).to(x.device) * data_std * 0.1  # 10%的标准差
+                noise = torch.randn_like(off_peak_data) * noise_std
+                x_aug[i, :, off_peak_mask] = off_peak_data + noise
         
         return x_aug
 
@@ -577,130 +436,69 @@ class DynamicPeakDetectionAugmenter:
 class TemporalAugmenter:
     """
     通用时序局部模式增强器。
-    - 对所有变量进行基于序列形态的增强
-    - 通过局部极值检测和波动性分析识别时序模式
-    - 捕捉序列的通用时序特征，不限于特定领域
     """
     def __init__(self):
         pass
-    
-    def temporal_pattern_augment(self, x):
-        x_aug = x.clone()
-        B, T, C = x.shape
-        
-        # 方法1：基于局部极值的增强
-        x_aug = self._local_extremum_augment(x_aug)
-        
-        # 方法2：基于波动模式的增强
-        x_aug = self._fluctuation_pattern_augment(x_aug)
-        
-        return x_aug
     
     def _local_extremum_augment(self, x):
         """
         基于局部极值点的增强
         """
-        B, T, C = x.shape
-        
+        B, C, T = x.shape
+        x_aug = x.clone()
         for i in range(B): # 依次处理每个样本
             for var_idx in range(C): # 每个样本中依次处理每个变量
-                var_series = x[i, :, var_idx]
+                var_series = x_aug[i, var_idx,:]
                 
                 # 检测局部极值
                 diff = torch.diff(var_series, prepend=var_series[0:1])
+                threshold = 1e-4 # 设置一个阈值，忽略微小变化
+                significant_changes = torch.abs(diff) > threshold
                 diff_sign = torch.sign(diff)
+                diff_sign[~significant_changes] = 0  # 微小变化视为平稳
+
                 diff_sign_change = torch.diff(diff_sign, prepend=diff_sign[0:1])
-                
                 # 极值点：符号变化非零的位置
                 extremum_mask = diff_sign_change != 0
                 
                 if extremum_mask.any():
                     # 对极值点进行轻微扰动
-                    extremum_scale = 0.98 + torch.rand(1).to(x.device) * 0.04 # 缩放因子范围为 [0.98，1.02]
-                    x[i, extremum_mask, var_idx] = x[i, extremum_mask, var_idx] * extremum_scale
-        
-        return x
-    
-    def _fluctuation_pattern_augment(self, x):
-        """
-        基于波动模式的增强
-        """
-        B, T, C = x.shape
-        
-        for i in range(B):
-            # 计算序列的波动性
-            # x[i]形状为[T,C],因此 volatility形状为[C]
-            # 通过样本x[i]每个变量的标准差反映每个变量波动性
-            volatility = torch.std(x[i], dim=0)  
-            
-            for var_idx in range(C):
-                if volatility[var_idx] > 0.01:  # 只对波动性较大的变量增强
-                    # 根据波动性调整增强强度
-                    aug_strength = min(volatility[var_idx].item() * 5, 0.1)
-                    noise = torch.randn(T).to(x.device) * aug_strength
-                    x[i, :, var_idx] = x[i, :, var_idx] + noise
-        
-        return x
-    
-class PatternBasedHolidayAugmenter:
-    """
-    基于序列模式识别的节假日增强器
-    """
-    def __init__(self, weekend_likelihood_threshold=0.7):
-        self.weekend_likelihood_threshold = weekend_likelihood_threshold
-    
-    def pattern_based_holiday_augment(self, x, load_var_index=0):
-        """
-        基于负荷模式识别"疑似节假日"并进行增强
-        """
-        x_aug = x.clone()
-        B, T, C = x.shape
-        
-        for i in range(B):
-            # 检测是否具有节假日/周末模式
-            is_holiday_like = self._detect_holiday_pattern(x[i, :, load_var_index])
-            
-            if is_holiday_like:
-                # 应用节假日增强
-                holiday_scale = 0.7 + torch.rand(1).to(x.device) * 0.6
-                x_aug[i, :, :] = x_aug[i, :, :] * holiday_scale
+                    extremum_scale = 0.9 + torch.rand(1).to(x.device) * 0.2 # 缩放因子范围为 [0.9，1.1]
+                    x_aug[i,var_idx,extremum_mask] = x_aug[i,var_idx,extremum_mask] * extremum_scale
         
         return x_aug
     
-    def _detect_holiday_pattern(self, load_series):
+    def _fluctuation_pattern_augment(self, x):
         """
-        检测负荷序列是否具有节假日模式
+        基于波动模式的增强 - 使用分位数范围
         """
-        T = load_series.size(0)
-        
-        # 特征1：日间波动性较低
-        daily_volatility = torch.std(load_series)
-        
-        # 特征2：负荷水平相对平稳
-        max_load = torch.max(load_series)
-        min_load = torch.min(load_series)
-        load_range_ratio = (max_load - min_load) / max_load
-        
-        # 特征3：早晚高峰不明显（简化检测）
-        if T >= 24:  # 假设序列包含完整的一天
-            morning_hours = load_series[8:10] if T >= 10 else load_series[-10:-8]
-            evening_hours = load_series[18:20] if T >= 20 else load_series[-20:-18]
-            day_avg = load_series.mean()
+        B, C, T = x.shape
+        x_aug = x.clone()
+        for i in range(B):
+            volatility = torch.std(x_aug[i], dim=1)
             
-            morning_peak = morning_hours.max() / day_avg
-            evening_peak = evening_hours.max() / day_avg
+            # 计算分位数
+            q1 = torch.quantile(volatility, 0.25)  # 25%分位数
+            q3 = torch.quantile(volatility, 0.75)  # 75%分位数
             
-            # 综合判断
-            is_holiday_like = (daily_volatility < 0.1 and 
-                             load_range_ratio < 0.5 and 
-                             morning_peak < 1.3 and 
-                             evening_peak < 1.3)
-        else:
-            # 对于较短序列，使用简化判断
-            is_holiday_like = (daily_volatility < 0.08 and 
-                             load_range_ratio < 0.4)
+            # 动态阈值：只对波动性高于Q1的变量增强
+            # 对高于Q3的变量使用更强的增强
+            threshold = q1
+            
+            for var_idx in range(C):
+                if volatility[var_idx] > threshold:
+                    # 确定增强强度
+                    if volatility[var_idx] > q3:
+                        # 高波动性变量：较强增强
+                        aug_strength = 0.1 + torch.rand(1).to(x_aug.device) * 0.1  # 0.1-0.2
+                    else:
+                        # 中等波动性变量：适度增强
+                        aug_strength = 0.05 + torch.rand(1).to(x_aug.device) * 0.05  # 0.05-0.1
+                    
+                    noise = torch.randn(T).to(x_aug.device) * aug_strength
+                    x_aug[i, var_idx, :] = x_aug[i, var_idx, :] + noise
         
-        return is_holiday_like
+        return x_aug
 
 class DomainAugmentationFramework:
     """
@@ -712,7 +510,6 @@ class DomainAugmentationFramework:
         self.causal_augmenter = None
         self.peak_augmenter = DynamicPeakDetectionAugmenter()
         self.temporal_augmenter = TemporalAugmenter()
-        self.holiday_augmenter = PatternBasedHolidayAugmenter()
 
         
     def initialize_from_data(self, data_x, data_y):
@@ -732,16 +529,13 @@ class DomainAugmentationFramework:
         # 2. 正增强：峰谷增强（负荷变量）
         positive_x = self.peak_augmenter.dynamic_peak_augment(positive_x, self.target_index)
         
-        # 3. 正增强：节假日增强
-        positive_x = self.holiday_augmenter.pattern_based_holiday_augment(positive_x, self.target_index)
-        
-        # 4. 正负增强：通用时序局部模式增强
-        positive_x = self.temporal_augmenter.temporal_pattern_augment(positive_x)
+        # 3. 正增强：通用时序局部模式增强
+        positive_x = self.temporal_augmenter._local_extremum_augment(positive_x)
         
         # 对负样本也应用通用时序局部模式增强以增加多样性
         enhanced_negative_list = []
         for neg_x in negative_x_list:
-            neg_enhanced = self.temporal_augmenter.temporal_pattern_augment(neg_x)
+            neg_enhanced = self.temporal_augmenter._fluctuation_pattern_augment(neg_x)
             enhanced_negative_list.append(neg_enhanced)
         
         # 可视化
@@ -767,7 +561,7 @@ class DomainAugmentationFramework:
         if not plot_augment_flag or not plot_augment:
             return
         
-        batch_size, seq_len, num_features = original.shape
+        batch_size, num_features,seq_len = original.shape
         negative_num = len(negatives)
         
         # 只可视化第一个样本
@@ -775,24 +569,24 @@ class DomainAugmentationFramework:
         
         for i in range(num_features):
             # 确定变量类型用于标签
-            var_type = "因果" if i in causal_vars else "非因果"
+            var_type = "causal" if i in causal_vars else "non-causal"
             
             for j in range(negative_num):
                 plt.figure(figsize=(15, 5))
                 
-                # 提取数据 - 注意维度是 [B, T, C]
-                orig_data = original[sample_idx, :, i].detach().cpu().numpy()
-                pos_data = positive[sample_idx, :, i].detach().cpu().numpy()
-                neg_data = negatives[j][sample_idx, :, i].detach().cpu().numpy()
+                # 提取数据 - 注意维度是 [B, C, T]
+                orig_data = original[sample_idx,i, :].detach().cpu().numpy()
+                pos_data = positive[sample_idx, i, :].detach().cpu().numpy()
+                neg_data = negatives[j][sample_idx, i, :].detach().cpu().numpy()
                 
                 # 绘制三条线
-                plt.plot(orig_data, label='原始数据', linestyle='-', marker='o', markersize=3)
-                plt.plot(pos_data, label='正增强', linestyle='--', marker='x', markersize=3)
-                plt.plot(neg_data, label=f'负增强{j+1}', linestyle=':', marker='s', markersize=3)
+                plt.plot(orig_data, label='original', linestyle='-', marker='o', markersize=3)
+                plt.plot(pos_data, label='positive augment', linestyle='--', marker='x', markersize=3)
+                plt.plot(neg_data, label=f'negative augment {j+1}', linestyle=':', marker='s', markersize=3)
                 
-                plt.title(f'{var_type}变量 {i} - 负增强策略 {j+1}')
-                plt.xlabel('时间步')
-                plt.ylabel('数值')
+                plt.title(f'{var_type} variable{i} - negative augmentation {j+1}')
+                plt.xlabel('timestamp')
+                plt.ylabel('value')
                 plt.legend()
                 plt.grid(True, alpha=0.3)
                 

@@ -5,7 +5,7 @@ from models.ELFNet import TrendRepresentationDisentangler, BandedFourierLayer,Fe
 import torch.fft as fft
 from layers.depthwise import DepthwiseNet
 from layers.dilated_conv import DilatedConvEncoder
-from utils.augmentation import augment
+from utils.augmentation import DomainAugmentationFramework
 import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
@@ -188,7 +188,7 @@ class ELFNet_no_disentanglement(nn.Module):
     
 
     def compute_loss(self,batch_x,batch_y,folder_path,groups):
-        batch_x, positive_batch_x, negative_batch_x_list= augment(batch_x,batch_y,self.args.num_augment,folder_path,plot=False)
+        batch_x, positive_batch_x, negative_batch_x_list= DomainAugmentationFramework.augment_batch(batch_x,batch_y,self.args.num_augment,folder_path,plot=False)
         
         rand_idx = np.random.randint(0, batch_x.shape[1]) 
         
@@ -553,7 +553,7 @@ class ELFNet_Dilation(nn.Module):
 
 
     def compute_loss(self,batch_x,batch_y,plot_dir,groups):
-        batch_x, positive_batch_x, negative_batch_x_list= augment(batch_x,batch_y,self.args.num_augment,plot_dir,self.args.plot)
+        batch_x, positive_batch_x, negative_batch_x_list= DomainAugmentationFramework.augment_batch(batch_x,batch_y,self.args.num_augment,plot_dir,self.args.plot)
         
         rand_idx = np.random.randint(0, batch_x.shape[1]) 
         
@@ -795,7 +795,7 @@ class ELFNet_depthwise(nn.Module):
 
 
     def compute_loss(self,batch_x,batch_y,folder_path,groups):
-        batch_x, positive_batch_x, negative_batch_x_list= augment(batch_x,batch_y,self.args.num_augment,folder_path)
+        batch_x, positive_batch_x, negative_batch_x_list= DomainAugmentationFramework.augment_batch(batch_x,batch_y,self.args.num_augment,folder_path)
         
         rand_idx = np.random.randint(0, batch_x.shape[1]) 
         

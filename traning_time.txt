@@ -1,5 +1,0 @@
-ELFNet_Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None: 5141.49, 34.47, 5175.96
-ELFNet_Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None: 0.00, 321.33, 321.33
-ELFNet_Mathematical_Modeling_Competition_seq_96_pred_48_stride_1_cluster_None_None: 0.00, 339.88, 339.88
-ELFNet_XJ_Photovoltaic_seq_96_pred_48_stride_1_cluster_None_None_Mathematical_Modeling_Competition: 0.00, 35.54, 35.54
-ELFNet_XJ_Photovoltaic_seq_96_pred_48_stride_1_cluster_None_XJ_Photovoltaic: 0.00, 377.13, 377.13
