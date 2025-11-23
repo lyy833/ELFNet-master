@@ -413,7 +413,7 @@ class ELFNet(nn.Module):
         self.projection = nn.Linear(args.hidden_dims, args.c_out, bias=True)  # 新增的全连接层
         self.pool = nn.AdaptiveAvgPool1d(output_size=args.pred_len )  # 自适应平均池化层
         
-        self.augmentor = DomainAugmentationFramework(args.pretrain_target_idx)
+        self.augmentor = DomainAugmentationFramework(args)
         
         
         if device == 'cuda:{}'.format(self.args.gpu):
@@ -666,8 +666,10 @@ class ELFNet(nn.Module):
         #    batch_x, batch_y, self.args.num_augment, plot_dir, 
         #    self.args.plot_augment, plot_augment_flag)
 
-        batch_x, positive_batch_x, negative_batch_x_list = self.augmentor.augment_batch(batch_x, batch_y,plot_dir, plot_augment_flag)
-        
+        batch_x, positive_batch_x, negative_batch_x_list,trend_negative_batch_x_list,seasonal_negative_batch_x_list = self.augmentor.augment_batch(batch_x, batch_y,plot_dir, plot_augment_flag)
+        t_negative_batch_x_list = negative_batch_x_list + trend_negative_batch_x_list
+        s_negative_batch_x_list = negative_batch_x_list + seasonal_negative_batch_x_list
+
         batch_x = batch_x.to(torch.float32)
         batch_x = batch_x.transpose(1, 2).to(self.device)
         
@@ -678,20 +680,24 @@ class ELFNet(nn.Module):
         positive_batch_x = positive_batch_x.transpose(1, 2)
         output_positive_t, output_positive_s = self.forward(positive_batch_x.float().to(self.device), groups)
         
-        # 获取负样本表示
+        # 分别获取趋势性/季节性负样本表示
         output_negative_t_list = []
-        output_negative_s_list = []
-        for negative_batch_x in negative_batch_x_list:
+        for negative_batch_x in t_negative_batch_x_list:
             negative_batch_x = negative_batch_x.to(torch.float32)
             negative_batch_x = negative_batch_x.transpose(1, 2)
-            output_negative_t, output_negative_s = self.forward(negative_batch_x.float().to(self.device), groups)
+            output_negative_t, _= self.forward(negative_batch_x.float().to(self.device), groups)
             output_negative_t_list.append(output_negative_t)
+        output_negative_s_list = []
+        for negative_batch_x in s_negative_batch_x_list:
+            negative_batch_x = negative_batch_x.to(torch.float32)
+            negative_batch_x = negative_batch_x.transpose(1, 2)
+            _, output_negative_s = self.forward(negative_batch_x.float().to(self.device), groups)
             output_negative_s_list.append(output_negative_s)
         
-        # 改进的趋势对比损失计算
+        # 趋势性成分对比损失计算
         trend_loss = self._compute_trend_contrastive_loss(output_t, output_positive_t, output_negative_t_list)
         
-        # 修正的季节性对比损失计算（时域）
+        # 季节性成分对比损失计算（时域）
         seasonal_loss = self._compute_seasonal_contrastive_loss(output_s, output_positive_s, output_negative_s_list)
         
         # 计算总对比损失

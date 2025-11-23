@@ -58,17 +58,18 @@ if __name__ == "__main__":
     parser.add_argument('--pretrain_mode', type=str, default='one2many', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
     ## one2many模式下的预训练数据集路径，此模式指 “单数据集预训练+其它数据集独立微调与测试”
     #parser.add_argument('--pretrain_data_path', type=str, default=None,help='预训练数据集路径，用于one2many模式')
-    parser.add_argument('--pretrain_data_path', type=str, default='datasets/Australia_Load&Price.csv',help='预训练数据集路径，用于one2many模式')
+    parser.add_argument('--pretrain_data_path', type=str, default='datasets/Mathematical_Modeling_Competition.csv',help='预训练数据集路径，用于one2many模式')
     ## data_path : single 模式下的数据集路径
     ### datasets/Mathematical_Modeling_Competition.csv
     ### datasets/Australia_Load&Price.csv
     ### datasets/XJ_Photovoltaic.csv
-    parser.add_argument('--data_path', type=str, default='datasets/XJ_Photovoltaic.csv', help='single 模式下的唯一数据集路径或者one2many模式下的微调数据集路径')
+    ### datasets/Panama_CND.csv
+    parser.add_argument('--data_path', type=str, default='datasets/Australia_Load&Price.csv', help='single 模式下的唯一数据集路径或者one2many模式下的微调数据集路径')
     #parser.add_argument('--data_path', type=str, default='datasets/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径或者one2many模式下的微调数据集路径')
     parser.add_argument('--root_path', type=str,default='./', help='Root path to the dataset')
 
     # 数据预处理相关
-    parser.add_argument('--pretrain_freq', type=str, default='T',choices=['T','H','D'], help='Frequency for time features of the pretrain dataset(可选：[分钟t,小时h,天d])')
+    parser.add_argument('--pretrain_freq', type=str, default='D',choices=['T','H','D'], help='Frequency for time features of the pretrain dataset(可选：[分钟t,小时h,天d])')
     parser.add_argument('--finetune_freq', type=str, default='T',choices=['T','H','D'], help='Frequency for time features of the finetune dataset(可选：[分钟t,小时h,天d])')
     parser.add_argument('--scale', type=str, default='True', help='Whether to perform data standardization')
     parser.add_argument('--cluster', type=str, default='False', help='Whether to use clustering to decrease samples')
@@ -102,7 +103,7 @@ if __name__ == "__main__":
     parser.add_argument('--improved_delta', type=float, default=0.05, help='Minimum improvement threshold in early stopping mechanism')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate, options: [type1, type2, cosine]')
-    #parser.add_argument('--pretrained_model_path', type=str, default='test_results/XJ_Photovoltaic_seq_96_pred_48_stride_1_cluster_None/pretrained_ELFNet_family/ELFNet.pth', help='Saved pretrained model path for further finetune')
+    #parser.add_argument('--pretrained_model_path', type=str, default='./test_results/Australia_Load&Price_seq_96_pred_48_stride_1_cluster_None/pretrained_ELFNet_family/ELFNet.pth', help='Saved pretrained model path for further finetune')
     parser.add_argument('--pretrained_model_path', type=str, default=None, help='Saved pretrained model path for further finetune')
     parser.add_argument('--freeze_start_layer', type=int, default=2,help='The starting index of the deep layer in the feature extractor during the fine-tuning stage')
 
