@@ -1,0 +1,217 @@
+# coding = utf-8
+import argparse
+from exp_forecasting import Exp_forecasting
+import os
+
+def main(args):
+
+    if args.pretrained_model_path is not None:   # pretrained_model_path: 已保存预训练模型,第二阶段的微调继续训练
+      p = os.path.normpath(args.pretrained_model_path)
+      parts = p.split(os.sep)
+      if 'test_results' in parts:
+          idx = parts.index('test_results')
+          # 取 test_results 的下一级目录名；若不存在则回退取倒数第二项
+          setting = parts[idx + 1] if idx + 1 < len(parts) else (parts[-2] if len(parts) >= 2 else parts[-1])
+      else:
+          # 未包含 test_results，取倒数第二个路径段（若不存在则取最后一段）
+          setting = parts[-2] if len(parts) >= 2 else parts[-1]
+    elif args.finetuned_model_path is not None:   # finetuned_model_path: 已保存微调模型重新测试
+      p = os.path.normpath(args.finetuned_model_path) # 比如./test_results/XJ_Photovoltaic_seq_192_pred_96_stride_1/finetuned_ELFNet_family/ELFNet/Australia_Load&Price.pth
+      parts = p.split(os.sep) 
+      if 'test_results' in parts:
+          idx = parts.index('test_results')
+          # 取 test_results 的下一级目录名；若不存在则回退取倒数第二项
+          setting = parts[idx + 1] if idx + 1 < len(parts) else (parts[-2] if len(parts) >= 2 else parts[-1])
+      else:
+          # 未包含 test_results，取倒数第二个路径段（若不存在则取最后一段）
+          setting = parts[-2] if len(parts) >= 2 else parts[-1]
+    else: # 直接从零开始训练，setting是预训练/单阶段有监督训练数据集任务设置
+      setting = f"{os.path.splitext(args.pretrain_data_path.split('/')[-1])[0]}_seq_{args.seq_len}_pred_{args.pred_len}_stride_{args.stride}"
+    
+    # 设置单次实验结果保存的test_results下一级路径，并创建相应的文件夹，以setting作为区分
+    folder_path = './test_results/' + setting + '/'
+    if not os.path.exists(folder_path):
+      os.makedirs(folder_path)
+    # 设置训练过程中可视化结果保存路径并创建相应的文件夹（数据增强可视化以及loss曲线可视化）
+    if args.plot_augment or args.plot_loss:
+      plot_dir = os.path.join(folder_path, "plot")
+      if not os.path.exists(plot_dir):
+        os.makedirs(plot_dir)
+    else:
+       plot_dir=None
+    
+    exp = Exp_forecasting(args,setting,folder_path,plot_dir)
+
+    
+    if not args.test_finetuned_model and args.finetuned_model_path is None: # 非测试模式
+      print(f"Training {setting}")
+      if args.model_used in ['ELFNet','ELFNet_wo_TS', 'ELFNet_supervised','ELFNet_ablation_augmentor','ELFNet_common_TS','ELFNet_supervised_pretrain','ELFNet_single_band_SRD','ELFNet_wo_CGU']:
+        training_time_stage1, training_time_stage2, total_training_time,model_path = exp._train_ELFNet_family() #ELFNet或4个消融模型
+      elif args.model_used in ['TS2Vec','PatchTST_SS','CoST','TimeMAE']:
+        training_time_stage1, training_time_stage2, total_training_time,model_path = exp._train_ss_compare()
+      else:#基线模型训练
+        total_training_time,model_path = exp._train_compare()
+    else: # 测试模式，不训练模型，但需要初始化模型框架，以便后续测试加载已保存模型权重
+      model_path = args.finetuned_model_path
+
+    print(f"Testing {setting}")
+    
+    inference_time = exp.test(model_path,setting,test=1)
+
+    if not args.test_finetuned_model:
+      # 全局结果文件夹——直接保存在根目录下
+      results_folder = "./"
+      file_path = os.path.join(results_folder, 'traning_testing_time.txt') # 构建保存时间的文件路径
+      # 检查文件是否存在以及是否为空，如果为空则写入header
+      if not os.path.exists(file_path) or os.stat(file_path).st_size == 0:
+        with open(file_path, 'w') as file:  # 以写模式打开文件
+          file.write("setting, traing_time_of_stage1, traing_time_of_stage2, total_traing_time, inference_time\n")
+      
+      # 以追加模式打开文件并写入训练时间
+      with open(file_path, 'a') as file:
+          if args.model_used in ['ELFNet','ELFNet_ablation_augmentor', 'ELFNet_wo_TS', 'ELFNet_supervised','ELFNet_common_TS','ELFNet_supervised_pretrain','ELFNet_single_band_SRD','ELFNet_wo_CGU','TS2Vec','PatchTST_SS','CoST','TimeMAE']:
+            file.write(f"{args.model_used}_{setting}_{os.path.splitext(args.data_path.split('/')[-1])[0]}: {training_time_stage1:.2f}, {training_time_stage2:.2f}, {total_training_time:.2f}, {inference_time:.2f}\n")
+          else:
+            file.write(f"{args.model_used}_{setting}: ,{total_training_time:.2f},{total_training_time:.2f}, {inference_time:.2f}\n")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Run load forecasting experiments based on time series')
+    
+    # 训练模式设置
+    parser.add_argument('--training_mode', type=str, default='single', choices=['single', 'one2many'],help='预训练模式: single-单数据集任务, one2many-一对多跨数据集任务')
+    parser.add_argument('--finetune_pretrained_model', type=bool, default=False,help='为Ture时表示直接微调已保存的预训练模型')
+    parser.add_argument('--test_finetuned_model', type=bool, default=False,help='为Ture时表示直接测试已保存的微调模型')
+    #parser.add_argument('--pretrained_model_path', type=str, default='test_results/Panama_CND_seq_168_pred_24_stride_1/pretrained_ELFNet_family/ELFNet_old.pth', help='Saved pretrained model path for further finetune')
+    parser.add_argument('--pretrained_model_path', type=str, default=None, help='Saved pretrained model path for further finetune')
+    #parser.add_argument('--finetuned_model_path', type=str, default='test_results/XJ_Photovoltaic_seq_192_pred_96_stride_1/finetuned_ELFNet_family/ELFNet/XJ_Photovoltaic.pth',help='待测试的已保存微调模型的路径')
+    parser.add_argument('--finetuned_model_path', type=str, default=None,help='待测试的已保存微调模型的路径')
+    
+    # 数据集设置
+    ## one2many模式下的预训练数据集路径，此模式指 “单数据集预训练+其它数据集独立微调与测试”
+    #parser.add_argument('--pretrain_data_path', type=str, default=None,help='预训练数据集路径，用于one2many模式')
+    parser.add_argument('--pretrain_data_path', type=str, default='datasets/Mathematical_Modeling_Competition.csv',help='预训练数据集路径，用于one2many模式')
+    ## data_path : single 模式下的数据集路径
+    ### datasets/Mathematical_Modeling_Competition.csv
+    ### datasets/Australia_Load&Price.csv
+    ### datasets/XJ_Photovoltaic.csv
+    ### datasets/Panama_CND.csv
+    #parser.add_argument('--data_path', type=str, default='datasets/Australia_Load&Price.csv', help='single 模式下的唯一数据集路径或者one2many模式下的微调数据集路径')
+    parser.add_argument('--data_path', type=str, default='datasets/Mathematical_Modeling_Competition.csv', help='single 模式下的唯一数据集路径或者one2many模式下的微调数据集路径')
+    parser.add_argument('--root_path', type=str,default='./', help='Root path to the dataset')
+
+
+
+    # 数据预处理相关
+    parser.add_argument('--pretrain_freq', type=str, default='D',choices=['T','H','D'], help='Frequency for time features of the pretrain dataset(可选：[分钟t,小时h,天d])')
+    parser.add_argument('--finetune_freq', type=str, default='D',choices=['T','H','D'], help='Frequency for time features of the finetune dataset(可选：[分钟t,小时h,天d])')
+    parser.add_argument('--scale', type=str, default='True', help='Whether to perform data standardization')
+    
+    # basic config
+    parser.add_argument('--alpha', type=float, default=0.5, help='Weighting hyperparameter for loss function')
+    parser.add_argument('--plot_augment', type=bool, default=False,help='Whether to plot augmentation results ')
+    parser.add_argument('--plot_loss', type=bool, default=False,help='Whether to plot training loss')
+    parser.add_argument('--plot_test', type=bool, default=True,help='Whether to plot test results')
+    parser.add_argument('--model_used', type=str, default='PatchTST_SU', help='Model to use (e.g., TimesNet)') 
+    parser.add_argument('--log_interval',type = int, default=50, help='Log interval for training')
+    
+    # forecasting task
+    parser.add_argument('--seq_len', type=int, default=90, help='Sequence length')
+    parser.add_argument('--pred_len', type=int, default=30, help='Prediction length')
+    parser.add_argument('--stride', type=int, default=1, help='Stride for sliding window')
+    parser.add_argument('--pretrain_target_idx', type=int, default=5, help='The index of the target variable to predict in the dataset acorrding to data_path')
+    parser.add_argument('--finetune_target_idx', type=int, default=5, help='The index of the target variable to predict in the dataset acorrding to data_path')
+    
+    # train settiings and optimization
+    parser.add_argument('--temperature', type=float, default=0.7, help='temperature scaling factor')
+    parser.add_argument('--optimizername', type=str, default='Adam', help='The type of optimizer')
+    parser.add_argument('--train_epochs1', type=int, default=20, help='Number of epochs for pretrain ELFNet using contrasitive learning')
+    parser.add_argument('--train_epochs2', type=int, default=30 ,help='Number of epochs for pretrain ELFNet using supervised learning')
+    parser.add_argument('--epochs', type=int, default=30, help='Number of total epochs for training compare model')
+    parser.add_argument('--lr', type=float, default=0.00001, help='Learning rate')
+    parser.add_argument('--patience_epochs', type=int, default=15, help='early stopping patience - epoch level')
+    parser.add_argument('--patience_iterations', type=int, default=500, help='early stopping patience - iteration level')
+    parser.add_argument('--min_iterations', type=int, default=500, help='minimum number of iterations in early stopping mechanism')
+    parser.add_argument('--improved_delta', type=float, default=0.05, help='Minimum improvement threshold in early stopping mechanism')
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
+    parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate, options: [type1, type2, cosine]')
+    parser.add_argument('--freeze_start_layer', type=int, default=2,help='The starting index of the deep layer in the feature extractor during the fine-tuning stage')
+
+
+    # GPU
+    parser.add_argument('--num_workers', type=int, default=0, help='Number of workers for data loading')
+    parser.add_argument('--use_gpu', type=bool, default=False, help='Whether to use GPU')
+    parser.add_argument('--gpu', type=int, default=0, help='GPU device id')
+    
+    # model define
+    parser.add_argument('--depth', type=int, default=8, help='Number of hidden layers in the FeatureExtractor')
+    parser.add_argument('--dropout', type=float, default=0.1, help='dropout')
+    parser.add_argument('--kernels', type=int, nargs='+', default=[1, 2, 4, 8, 16, 32, 64, 128], help='The kernel sizes used in the mixture of AR expert layers')
+    parser.add_argument('--kernel_size', type=int, default=4, help='The kernel sizes used in the FeatureExtractor and the FeatureReducer')
+    parser.add_argument('--hidden_dims', type=int,  default=64, help='The hidden layers dimensions used in the feature extractor')
+    parser.add_argument('--reduce_hidden_dims', type=int, nargs='+', default=[128 ,64,32], help='The hidden layers dimensions used in the FeatureReducer')
+    parser.add_argument('--repr_dims', type=int, default=320, help='The representation dimension ')
+    parser.add_argument('--c_out', type=int, default=1, help='final output size')
+    parser.add_argument('--e_layers', type=int, default=2, help='num of encoder layers')
+    parser.add_argument('--d_layers', type=int, default=1, help='num of decoder layers')
+    parser.add_argument('--d_ff', type=int, default=2048, help='dimension of fcn')
+    parser.add_argument('--distil', action='store_false',
+                        help='whether to use distilling in encoder, using this argument means not using distilling',
+                        default=True)
+    parser.add_argument('--factor', type=int, default=1, help='attn factor')
+    parser.add_argument('--output_attention', action='store_true', help='whether to output attention in ecoder')
+    parser.add_argument('--n_heads', type=int, default=8, help='The number of heads in the attention layers')
+    parser.add_argument('--activation', type=str, default='gelu', help='activation')
+    parser.add_argument('--num_kernels', type=int, default=6, help='for Inception')
+    parser.add_argument('--enc_in', type=int, default=6, help='encoder input size')
+    parser.add_argument('--dec_in', type=int, default=1, help='decoder input size')
+    parser.add_argument('--embed', type=str, default='timeF',
+                        help='time features encoding, options:[timeF, fixed, learned]')
+    parser.add_argument('--dilation_c', type=int, default=4, help='Dilation coefficient in the ADDSTCN, recommended to be equal to kernel size (default: 4)')
+    parser.add_argument('--moving_avg', type=int, default=25, help='window size of moving average')
+    ## segRNN
+    parser.add_argument('--seg_len', type=int, default=12,
+                        help='the length of segmen-wise iteration of SegRNN (must be an integer multiple of seq_len)')
+    ## PatchTST
+    parser.add_argument('--patch_len', type=int, default=10, help='patch length of PatchTST and its supervised version')
+    parser.add_argument('--d_ff_PatchTST', type=int, default=512, help='Tranformer MLP dimension of PatchTST')
+    parser.add_argument('--head_dropout', type=float, default=0.2, help='head dropout of PatchTST')
+    ## TimeMAE
+    parser.add_argument('--wave_length', type=int, default=12, help='wave length of TimeMAE(must be an integer multiple of seq_len)')
+    parser.add_argument('--vocab_size', type=int, default=192, help='vocabulary size of TimeMAE')
+    ## PatchTST supervised version
+    #### PatchTST supervised version 初始学习率应该设置为1e-5,否则会梯度爆炸
+    parser.add_argument('--fc_dropout', type=float, default=0.05, help='fully connected dropout of PatchTST supervised version')
+    parser.add_argument('--head_dropout_su', type=float, default=0.0, help='head dropout of PatchTST supervised version')
+    parser.add_argument('--individual', type=int, default=0, help='individual head of PatchTST supervised version; True 1 False 0')
+    parser.add_argument('--padding_patch', default='end', help='None: None; end: padding on the end (of PatchTST supervised version)')
+    parser.add_argument('--revin', type=int, default=0, help='RevIN; True 1 False 0 (of PatchTST supervised version)')
+    parser.add_argument('--affine', type=int, default=0, help='RevIN-affine; True 1 False 0  (of PatchTST supervised version)')
+    parser.add_argument('--subtract_last', type=int, default=0, help='0: subtract mean; 1: subtract last')
+    parser.add_argument('--decomposition', type=int, default=0, help='decomposition; True 1 False 0')
+    parser.add_argument('--kernel_size_PatchTST', type=int, default=25, help='decomposition-kernel')
+
+    parser.add_argument('--seed', type=int, default=2, help="Randomization seed")
+    parser.add_argument('--inverse', type=bool, help='inverse output data', default=True)
+
+    # Variable Grouping
+    #parser.add_argument("--pretrain_groups", type=str, default='[[2], [3], [0], [1], [4], [5], [6], [7]]', help='Comma-separated list of lists defining column groups for pretrain_data_path')
+    #parser.add_argument("--pretrain_groups", type=str, default='[[2], [3], [0, 1], [4, 5, 6], [7]]', help='Comma-separated list of lists defining column groups for pretrain_data_path') # 新疆数据集已保存预训练模型分组
+    #parser.add_argument("--pretrain_groups", type=str, default='[[3], [4], [5], [0, 1, 2]]', help='Comma-separated list of lists defining column groups for pretrain_data_path') # 澳大利亚数据集已保存预训练模型分组
+    #parser.add_argument("--finetune_groups", type=str, default='[[2], [3], [0, 1], [4, 5, 6], [7]]', help='Comma-separated list of lists defining column groups for data_path')  # [[0,1,2],[3],[4],[5]]  or [[0,1],[2],[3],[4,5,6],[7]]
+    #parser.add_argument("--finetune_groups", type=str, default='[[2], [3], [0], [1], [4], [5], [6], [7]]', help='Comma-separated list of lists defining column groups for data_path')
+    parser.add_argument("--pretrain_groups", type=str, default=None, help='Comma-separated list of lists defining column groups for pretrain_data_path') 
+    parser.add_argument("--finetune_groups", type=str, default=None, help='Comma-separated list of lists defining column groups for data_path')  
+    parser.add_argument("--similarity_alpha", type=float, default=0.6, help='The weight of the Pearson coefficient in the comprehensive similarity')  
+    parser.add_argument("--cluster_theta", type=float, default=0.4, help='Minimum similarity threshold within the cluster')  
+    parser.add_argument("--cluster_gamma", type=float, default=0.5, help='Maximum inter-cluster similarity threshold') 
+    parser.add_argument("--cluster_kappa", type=int, default=5, help='Maximum cluster size') 
+    parser.add_argument("--cluster_delta", type=float, default=0.05, help='Dynamically adjust the step size during hierarchical clustering')  
+    parser.add_argument("--cluster_max_iter", type=int, default=100, help='Maximum number of clustering iterations')                    
+    
+    # 消融实验
+    parser.add_argument('--wo_augmentor', type=str, default=None)
+
+
+    args = parser.parse_args()
+    main(args)

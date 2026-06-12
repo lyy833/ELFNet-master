@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# PyTorch / Training
+*.pth
+*.pth.tar
+checkpoints/
+
+# Test results (personal)
+test_results/
+result_forecast.txt
+traning_testing_time.txt
+
+# Personal experiment analysis
+experiments_analysis/
+
+# Visualizations
+*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
