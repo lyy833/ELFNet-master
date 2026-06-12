@@ -247,12 +247,11 @@ The test script reports the following metrics:
 If you find this work useful for your research, please cite the corresponding thesis:
 
 ```bibtex
-@mastersthesis{ELFNet2025,
-  author  = {<Author Name>},
-  title   = {Research on Short-Term Load Forecasting Based on Learnable
-             Frequency-Domain Decomposition and Contrastive Representation Learning},
+@mastersthesis{ELFNet2026,
+  author  = {Y, Li},
+  title   = {Electric Load Forecasting Based on Time Series Representation Learning},
   school  = {Tianjin University},
-  year    = {2025}
+  year    = {2026}
 }
 ```
 

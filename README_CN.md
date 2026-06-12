@@ -247,11 +247,11 @@ python main.py --model_used TimesNet --data_path <path> --seq_len <L> --pred_len
 如果您的研究使用了本项目，请引用对应的硕士论文：
 
 ```bibtex
-@mastersthesis{ELFNet2025,
-  author  = {<作者名>},
-  title   = {基于可学习频域分解与对比表示学习的短期负荷预测研究},
+@mastersthesis{ELFNet2026,
+  author  = {李盈盈},
+  title   = {基于时间序列表示学习的电力负荷预测研究},
   school  = {天津大学},
-  year    = {2025}
+  year    = {2026}
 }
 ```
 
